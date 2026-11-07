@@ -1,0 +1,231 @@
+:root {
+  --bg: #141417;
+  --bg-soft: #1d1d22;
+  --text: #f2f2f5;
+  --muted: #8b8b95;
+  --accent: #ffcc00;
+  --like: #ff4d4d;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* никакого выделения текста и фокуса-подсветок (синий бокс на кнопках) */
+*,
+*::before,
+*::after {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+::selection {
+  background: transparent;
+  color: inherit;
+}
+
+button {
+  outline: none !important;
+}
+button:focus,
+button:focus-visible,
+button:active {
+  outline: none !important;
+  box-shadow: none !important;
+}
+button::-moz-focus-inner {
+  border: 0;
+}
+
+html, body {
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  user-select: none;
+  cursor: default;
+}
+
+#widget {
+  position: relative;
+  height: 100vh;
+  background: rgba(14, 14, 18, 0.25);
+  border: none;
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  backdrop-filter: blur(4px);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+/* перетаскивание окна за пустые места */
+#widget, #hit-area { -webkit-app-region: drag; }
+button, input { -webkit-app-region: no-drag; }
+#hit-area { position: absolute; inset: 0; }
+#auth-view { position: relative; }
+
+/* ---------- данные ---------- */
+
+#player {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+#cover {
+  width: 72px;
+  height: 72px;
+  min-width: 72px;
+  border-radius: 10px;
+  object-fit: cover;
+  background: #26262c;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+#info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+#title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#artist {
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3px;
+}
+
+#bar {
+  flex: 1;
+  height: 4px;
+  background: #2b2b33;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+#fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent), #ffd84d);
+  border-radius: 2px;
+  transition: width 0.25s linear;
+}
+
+#time {
+  min-width: 74px;
+  text-align: right;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- кнопки ---------- */
+
+#controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* режим «без кнопок» (выбирается в трее) */
+.no-buttons #controls { display: none; }
+
+.ctl {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: var(--bg-soft);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  outline: none;
+  overflow: hidden;
+}
+.ctl:hover { background: #2c2c34; }
+.ctl:active { transform: scale(0.92); }
+.ctl.main {
+  width: 42px;
+  height: 42px;
+  background: var(--accent);
+  color: #141414;
+}
+.ctl.main:hover { background: #ffd84d; }
+.ctl.liked { color: var(--like); }
+
+/* иконки-иконочки внутри кнопок */
+.ctl svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+  fill: currentColor;
+  pointer-events: none;
+}
+.ctl.main svg { width: 20px; height: 20px; }
+.ctl .heart {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.ctl.liked .heart { fill: currentColor; }
+
+/* ---------- авторизация ---------- */
+
+#auth-view {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.auth-text {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.btn-login {
+  border: none;
+  border-radius: 20px;
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--accent);
+  color: #141414;
+  cursor: pointer;
+}
+.btn-login:hover { background: #ffd84d; }
+
+[hidden] { display: none !important; }

@@ -1,0 +1,18 @@
+{
+  "name": "yandex-music-widget",
+  "version": "1.0.0",
+  "description": "Компактный виджет Яндекс Музыки для рабочего стола",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
+  }
+}

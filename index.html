@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; img-src https: data:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <link rel="stylesheet" href="styles.css" />
+  <title>Яндекс Музыка</title>
+</head>
+<body>
+  <div id="widget">
+    <div id="hit-area"></div>
+
+    <div id="auth-view" hidden>
+      <div class="auth-text">Виджет не подключён к Яндексу</div>
+      <button id="btn-login" class="btn-login">Войти через Яндекс</button>
+    </div>
+
+    <div id="player" hidden>
+      <img id="cover" src="" alt="" draggable="false" />
+      <div id="info">
+        <div id="title" title="">—</div>
+        <div id="artist">Пока тишина…</div>
+        <div id="progress-row">
+          <div id="bar"><div id="fill"></div></div>
+          <div id="time">0:00 / 0:00</div>
+        </div>
+      </div>
+      <div id="controls">
+        <button id="btn-like" class="ctl" title="Нравится">
+          <svg viewBox="0 0 24 24"><path class="heart" d="M12 20.3S4.9 16 .9 11C-1 8.6.5 5 4 5c2.1 0 3.4 1.1 4.2 2.4L12 9l3.8-1.6C16.6 6.1 17.9 5 20 5c3.5 0 5 3.6 3.1 6-4 5-11.1 9.3-11.1 9.3z"/></svg>
+        </button>
+        <button id="btn-prev" class="ctl" title="Предыдущий">
+          <svg viewBox="0 0 24 24"><path d="M6 6h2.2v12H6zM20 6l-10.4 6L20 18z"/></svg>
+        </button>
+        <button id="btn-play" class="ctl main" title="Пауза / Играть">
+          <svg id="ic-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+          <svg id="ic-pause" viewBox="0 0 24 24" hidden><path d="M7 5h3.6v14H7zM13.4 5H17v14h-3.6z"/></svg>
+        </button>
+        <button id="btn-next" class="ctl" title="Следующий">
+          <svg viewBox="0 0 24 24"><path d="M15.8 6H18v12h-2.2zM4 6l10.4 6L4 18z"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+  <script src="renderer.js"></script>
+</body>
+</html>
