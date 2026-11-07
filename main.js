@@ -533,16 +533,9 @@ ipcMain.handle('ui:getAuthState', () => Promise.resolve({ ok: !!loadToken() }));
 nativeTheme.themeSource = 'dark';
 
 app.whenReady().then(() => {
-  // автозапуск вместе с Windows (HKCU\...\Run)
-  try {
-    app.setLoginItemSettings({
-      openAtLogin: true,
-      path: process.execPath,
-      args: [`"${__dirname}"`],
-    });
-  } catch (e) {
-    console.error('autostart: ' + (e.message || e));
-  }
+  // автозапуск — ярлыком в каталоге «Автозагрузка» (создаётся отдельно),
+  // а через setLoginItemSettings не прописываем: он создавал безымянный
+  // реестровый ключ Run без иконки.
   createWindow();
   createTray();
   startServices();
