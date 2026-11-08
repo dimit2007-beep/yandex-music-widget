@@ -8,7 +8,8 @@ contextBridge.exposeInMainWorld('ymc', {
   ignoreMouse: (v) => ipcRenderer.invoke('ui:ignoreMouse', v),
   // ПКМ по часам — открыть меню у курсора
   ctxMenu: () => ipcRenderer.invoke('ymc:ctxmenu'),
-  // ручное перетаскивание: двигаем окно сами (drag-area глотает правый клик)
+  // отладка в лог основного процесса
+  log: (msg) => ipcRenderer.send('ymc:log', String(msg)),
   moveTo: (x, y) => ipcRenderer.send('ymc:moveTo', x, y),
   // текущая позиция окна (для старта перетаскивания)
   getPositions: () => ipcRenderer.invoke('ymc:getPositions'),

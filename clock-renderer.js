@@ -36,18 +36,24 @@ let drag = null; // { startMouseX, startMouseY, winX, winY }
 window.addEventListener('mousedown', (e) => {
   if (e.button !== 0 || locked) return;
   window.ymc.getPositions().then((pos) => {
-    if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) return;
+    if (!pos || pos.length < 2) return;
+    const [px, py] = pos;
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return;
     drag = {
       startMouseX: e.screenX,
       startMouseY: e.screenY,
-      winX: pos.x,
-      winY: pos.y,
+      winX: px,
+      winY: py,
     };
-  }).catch(() => {});
+  }).catch((err) => window.ymc.log('getPositions ERR ' + err));
 });
 
 window.addEventListener('mousemove', (e) => {
-  if (!drag || e.buttons !== 1 || locked) return;
+  if (!drag) return;
+  if (e.buttons !== 1 || locked) {
+    if (e.buttons !== 1) drag = null; // отпустили
+    return;
+  }
   if (!Number.isFinite(e.screenX) || !Number.isFinite(e.screenY)) return;
   window.ymc.moveTo(
     drag.winX + (e.screenX - drag.startMouseX),

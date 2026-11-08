@@ -21,6 +21,14 @@ const userDir = app.getPath('userData');
 const boundsFile = path.join(userDir, 'clock.json'); // границы окна
 const uiFile = path.join(userDir, 'clock-ui.json'); // { opacity, locked }
 
+// журнал часов (безопасная запись)
+const logFile = path.join(userDir, 'clock.log');
+const log = (msg) => {
+  try {
+    fs.appendFileSync(logFile, `[${new Date().toLocaleTimeString()}] ${msg}\n`);
+  } catch (_) {}
+};
+
 const DEFAULT_UI = { opacity: 25, locked: false };
 const OPACITIES = [0, 5, 10, 25, 40, 60, 80, 100];
 
@@ -160,13 +168,18 @@ ipcMain.on('ymc:moveTo', (_e, x, y) => {
   if (loadUi().locked) return; // зафиксировано — не двигаем
   const nx = Math.round(Number(x));
   const ny = Math.round(Number(y));
-  if (!Number.isFinite(nx) || !Number.isFinite(ny)) return; // NaN/мусор — пропускаем
+  if (!Number.isFinite(nx) || !Number.isFinite(ny)) {
+    log(`moveTo REJECTED: x=${x} y=${y}`);
+    return;
+  }
   win.setPosition(nx, ny, false);
 });
 ipcMain.handle('ymc:getPositions', () => {
   if (!win || win.isDestroyed()) return null;
   return win.getPosition();
 });
+// отладка из renderer
+ipcMain.on('ymc:log', (_e, msg) => log('renderer: ' + msg));
 
 // ---------------- рантайм ----------------
 
