@@ -414,6 +414,7 @@ function createWindow() {
     alwaysOnTop: true,
     skipTaskbar: true,
     transparent: true,
+    focusable: false, // клик по виджету не крадёт фокус у активного приложения
     title: 'Яндекс Музыка',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
