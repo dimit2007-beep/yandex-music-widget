@@ -156,6 +156,13 @@ button, input { -webkit-app-region: no-drag; }
 /* режим «без кнопок» (выбирается в трее) */
 .no-buttons #controls { display: none; }
 
+/* зафиксировано — перетаскивание запрещено (из трея или ПКМ) */
+body.locked #widget,
+body.locked #hit-area {
+  -webkit-app-region: no-drag;
+  cursor: default;
+}
+
 .ctl {
   display: flex;
   align-items: center;

@@ -59,7 +59,7 @@ const boundsFile = path.join(userDir, 'window.json');
 const uiFile = path.join(userDir, 'ui.json');
 
 // настройки вида: buttons — показывать кнопки плеера, opacity — прозрачность фона плашки (%)
-const DEFAULT_UI = { buttons: true, opacity: 25 };
+const DEFAULT_UI = { buttons: true, opacity: 25, locked: false };
 
 function loadUi() {
   try {
@@ -403,17 +403,28 @@ function createWindow() {
   });
   win.setAlwaysOnTop(true, 'screen-saver');
   win.loadFile('index.html');
+  // размер и позиция сохраняются debounce'ом (важно при жёстком рестарте виджета)
+  let boundsTimer = null;
+  const saveBoundsSoon = () => {
+    clearTimeout(boundsTimer);
+    boundsTimer = setTimeout(saveBounds, 500);
+  };
+  win.on('resize', saveBoundsSoon);
+  win.on('move', saveBoundsSoon);
+  win.on('close', saveBounds);
+  win.applyUi = (ui) => {
+    if (win.isDestroyed()) return;
+    win.setMovable(!ui.locked);      // фиксируем перетаскивание окна
+    win.setResizable(!ui.locked);    // и изменение размера тоже, раз «зафиксировано»
+  };
+  win.applyUi(loadUi()); // применить сохранённую фиксацию сразу
   win.webContents.on('did-finish-load', () => {
     pushToRenderer('yp:ui', loadUi()); // применить сохранённый вид
   });
-  win.on('close', saveBounds);  win.webContents.on('context-menu', (e) => {
+  // ПКМ по виджету — то же меню, что и у значка в трее
+  win.webContents.on('context-menu', (e) => {
     e.preventDefault();
-    Menu.buildFromTemplate([
-      { label: 'Вход через Яндекс…', click: openLogin },
-      { label: 'Сбросить токен (выйти)', click: logout },
-      { type: 'separator' },
-      { label: 'Закрыть виджет', click: () => { quitting = true; app.quit(); } },
-    ]).popup({ window: win });
+    buildTrayMenu().popup({ window: win });
   });
 }
 
@@ -421,6 +432,7 @@ function applyUi(patch) {
   const ui = { ...loadUi(), ...patch };
   saveUi(ui);
   if (tray) tray.setContextMenu(buildTrayMenu());
+  if (win && win.applyUi) win.applyUi(ui);
   pushToRenderer('yp:ui', ui);
 }
 
@@ -445,6 +457,12 @@ function buildTrayMenu() {
         checked: ui.opacity === v,
         click: () => applyUi({ opacity: v }),
       })),
+    },
+    {
+      label: 'Зафиксировать положение',
+      type: 'checkbox',
+      checked: !!ui.locked,
+      click: () => applyUi({ locked: !loadUi().locked }),
     },
     { type: 'separator' },
     { label: 'Вход через Яндекс…', click: openLogin },

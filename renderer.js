@@ -147,6 +147,7 @@ function applyUi(u) {
   const blur = o === 0 ? 0 : o < 15 ? 2 : o < 35 ? 4 : 6; // чем прозрачнее, тем меньше блюр
   document.getElementById('widget').style.backdropFilter = blur ? `blur(${blur}px)` : 'none';
   document.body.classList.toggle('no-buttons', u.buttons === false);
+  document.body.classList.toggle('locked', !!u.locked);
 }
 
 window.ym.onUi(applyUi);
