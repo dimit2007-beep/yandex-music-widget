@@ -264,7 +264,14 @@ async function onYnisonState(st) {
 }
 
 async function onSmtcState(st) {
-  if (!st) return; // тишина — оставляем последний трек в плашке
+  if (!st) {
+    // «ничего не играет»: если и CDP давно молчит (ЯМ закрыт) и Ynison свежим
+    // не был — гасим плашку до «Пока тишина…», а не держим застывший трек
+    if (Date.now() - lastCdpAt > 15000 && Date.now() - lastYnisonAt > 45000) {
+      await deliverState({ trackId: null, title: null, paused: true }, 'empty');
+    }
+    return;
+  }
   if (Date.now() - lastYnisonAt < 45000) return; // Ynison актуален — пропускаем
   await deliverState(
     {

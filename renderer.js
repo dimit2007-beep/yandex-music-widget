@@ -58,6 +58,11 @@ function renderState(s) {
     if (!els.cover.src || !els.cover.src.endsWith(s.cover.split('/').pop())) {
       els.cover.src = s.cover; // обновляем только при смене трека
     }
+    els.cover.style.visibility = 'visible';
+  } else {
+    // нет данных об обложке в этом состоянии — не показываем чужую устаревшую
+    els.cover.removeAttribute('src');
+    els.cover.style.visibility = 'hidden';
   }
   els.like.classList.toggle('liked', !!s.liked);
   els.icPlay.hidden = !s.paused;
