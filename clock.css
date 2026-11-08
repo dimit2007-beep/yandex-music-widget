@@ -1,0 +1,60 @@
+:root {
+  --text: #f2f2f5;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* без фокусов и выделений */
+*,
+*::before,
+*::after {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+::selection { background: transparent; color: inherit; }
+
+html, body {
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  cursor: default;
+}
+
+#plate {
+  position: relative;
+  height: 100%;
+  background: rgba(14, 14, 18, 0.25);
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  -webkit-app-region: drag;
+}
+
+#hit-area {
+  position: absolute;
+  inset: 0;
+  -webkit-app-region: drag;
+}
+
+#time {
+  font-size: 42px;
+  font-weight: 600;
+  color: var(--text);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 1px;
+  pointer-events: none;
+}
+
+/* зафиксировано — перетаскивание запрещено */
+body.locked #plate,
+body.locked #hit-area {
+  -webkit-app-region: no-drag;
+}
