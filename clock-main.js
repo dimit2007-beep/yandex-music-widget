@@ -158,7 +158,10 @@ ipcMain.handle('ymc:ctxmenu', () => {
 ipcMain.on('ymc:moveTo', (_e, x, y) => {
   if (!win || win.isDestroyed()) return;
   if (loadUi().locked) return; // зафиксировано — не двигаем
-  win.setPosition(Math.round(x), Math.round(y), false);
+  const nx = Math.round(Number(x));
+  const ny = Math.round(Number(y));
+  if (!Number.isFinite(nx) || !Number.isFinite(ny)) return; // NaN/мусор — пропускаем
+  win.setPosition(nx, ny, false);
 });
 ipcMain.handle('ymc:getPositions', () => {
   if (!win || win.isDestroyed()) return null;

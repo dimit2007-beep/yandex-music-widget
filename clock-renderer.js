@@ -36,7 +36,7 @@ let drag = null; // { startMouseX, startMouseY, winX, winY }
 window.addEventListener('mousedown', (e) => {
   if (e.button !== 0 || locked) return;
   window.ymc.getPositions().then((pos) => {
-    if (!pos) return;
+    if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) return;
     drag = {
       startMouseX: e.screenX,
       startMouseY: e.screenY,
@@ -47,7 +47,8 @@ window.addEventListener('mousedown', (e) => {
 });
 
 window.addEventListener('mousemove', (e) => {
-  if (!drag || e.buttons !== 1) return;
+  if (!drag || e.buttons !== 1 || locked) return;
+  if (!Number.isFinite(e.screenX) || !Number.isFinite(e.screenY)) return;
   window.ymc.moveTo(
     drag.winX + (e.screenX - drag.startMouseX),
     drag.winY + (e.screenY - drag.startMouseY)
