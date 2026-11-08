@@ -225,12 +225,14 @@ class CdpWatcher {
   }
 }
 
-// перезапуск приложения с флагом отладки (когда ЯМ запущен, но без порта)
-function buildRestartPs() {
+// перезапуск приложения с флагом отладки.
+// force=true — перезапустить даже если порт уже открыт (пункт меню «Перезапустить»);
+// force=false — только если ЯМ запущена без порта (автоматический помощник).
+function buildRestartPs(force = false) {
   return `
 $ErrorActionPreference = 'SilentlyContinue'
 $conn = Test-NetConnection 127.0.0.1 -Port ${PORT} -WarningAction SilentlyContinue
-if (-not $conn.TcpTestSucceeded) {
+if ($force -or -not $conn.TcpTestSucceeded) {
   $main = Get-CimInstance Win32_Process | Where-Object {
     ($_.CommandLine -match 'YandexMusic|Яндекс Музыка') -and
     ($_.CommandLine -notmatch '--type=') -and
@@ -241,6 +243,18 @@ if (-not $conn.TcpTestSucceeded) {
     Start-Sleep -Milliseconds 2000
     Start-Process $main.ExecutablePath -ArgumentList '--remote-debugging-port=${PORT}'
     Write-Output 'restarted'
+  } else {
+    # приложение вообще не запущено — поднимаем сами из стандартного места установки
+    $dir = Join-Path $env:LOCALAPPDATA 'Programs\\YandexMusic'
+    $exe = Get-ChildItem $dir -Filter '*.exe' -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -notmatch 'updater|setup|crash' } |
+      Select-Object -First 1 -ExpandProperty FullName
+    if ($exe) {
+      Start-Process $exe -ArgumentList '--remote-debugging-port=${PORT}'
+      Write-Output 'started'
+    } else {
+      Write-Output 'not-found'
+    }
   }
 }
 `;

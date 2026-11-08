@@ -452,6 +452,22 @@ function applyUi(patch) {
   pushToRenderer('yp:ui', ui);
 }
 
+// принудительный перезапуск ЯМ из меню (с портом отладки; поднимает, если закрыта)
+function restartYmNow() {
+  try {
+    const { spawn } = require('child_process');
+    const enc = Buffer.from(buildRestartPs(true), 'utf16le').toString('base64');
+    spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', enc], { windowsHide: true })
+      .stdout.on('data', (d) => {
+        const s = String(d).trim();
+        if (s) console.log('[cdp] restart ЯМ (manual): ' + s);
+        lastCdpAt = 0; // источник временно недоступен — переходим на резерв
+      });
+  } catch (e) {
+    console.error('[cdp] restart ЯМ: ' + e.message);
+  }
+}
+
 function buildTrayMenu() {
   const ui = loadUi();
   const OPACITIES = [0, 5, 10, 25, 40, 60, 80, 100];
@@ -481,6 +497,7 @@ function buildTrayMenu() {
       click: () => applyUi({ locked: !loadUi().locked }),
     },
     { type: 'separator' },
+    { label: 'Перезапустить Яндекс Музыку', click: restartYmNow },
     { label: 'Вход через Яндекс…', click: openLogin },
     { label: 'Сбросить токен (выйти)', click: logout },
     { type: 'separator' },
