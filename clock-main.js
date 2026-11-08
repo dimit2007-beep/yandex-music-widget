@@ -122,6 +122,7 @@ function createWindow() {
     alwaysOnTop: true,
     skipTaskbar: true,
     transparent: true,
+    focusable: false, // клик по часам не делает их активным окном — рабочий стол остаётся активным
     title: 'Часы',
     webPreferences: {
       preload: path.join(__dirname, 'preload-clock.js'),

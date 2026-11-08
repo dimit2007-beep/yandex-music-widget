@@ -62,7 +62,10 @@ window.addEventListener('mousemove', (e) => {
 });
 
 window.addEventListener('mouseup', (e) => {
-  if (e.button === 0) drag = null;
+  if (e.button === 0) {
+    drag = null;
+    updateIgnore(); // применяем клик-сквозь, отложенный на время жеста
+  }
 });
 
 // ------- ПКМ: меню у курсора -------
@@ -81,6 +84,8 @@ window.ymc.onFgMode((mode) => {
 });
 
 function updateIgnore() {
+  // во время перетаскивания не включаем клик-сквозь — иначе жест рвётся
+  if (drag) return;
   // у часов нет интерактивных элементов: интерактивен только рабочий стол
   const should = fgMode === 'desktop' ? false : true;
   if (should !== ignoreMouse) {
