@@ -1,4 +1,4 @@
-/* Часы: время + клик-сквозь + настройки вида из main. */
+/* Часы: время + клик-сквозь + ручное перетаскивание + ПКМ-меню. */
 
 const $ = (id) => document.getElementById(id);
 const timeEl = $('time');
@@ -9,22 +9,60 @@ function tick() {
   timeEl.textContent =
     String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
 }
-setTimeout(() => { tick(); setInterval(tick, 1000); }, 400); // старт после выравнивания по секунде не критичен
 tick();
+setTimeout(() => { tick(); }, 1000 - (Date.now() % 1000));
 setInterval(tick, 1000);
 
 // ------- вид: прозрачность/фиксация -------
+let locked = false;
 function applyUi(u) {
   const o = u.opacity == null ? 25 : u.opacity;
   const plate = $('plate');
   plate.style.background = `rgba(14, 14, 18, ${o / 100})`;
   const blur = o === 0 ? 0 : o < 15 ? 2 : o < 35 ? 4 : 6;
   plate.style.backdropFilter = blur ? `blur(${blur}px)` : 'none';
-  document.body.classList.toggle('locked', !!u.locked);
+  locked = !!u.locked;
+  document.body.classList.toggle('locked', locked);
 }
 
 window.ymc.onUi(applyUi);
 window.ymc.uiState().then(applyUi).catch(() => {});
+
+// ------- ручное перетаскивание (левая кнопка) -------
+// drag-area не используем: на «drag» областях Windows глотает правый клик,
+// а нам нужно и таскать, и открывать меню.
+let drag = null; // { startMouseX, startMouseY, winX, winY }
+
+window.addEventListener('mousedown', (e) => {
+  if (e.button !== 0 || locked) return;
+  window.ymc.getPositions().then((pos) => {
+    if (!pos) return;
+    drag = {
+      startMouseX: e.screenX,
+      startMouseY: e.screenY,
+      winX: pos.x,
+      winY: pos.y,
+    };
+  }).catch(() => {});
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!drag || e.buttons !== 1) return;
+  window.ymc.moveTo(
+    drag.winX + (e.screenX - drag.startMouseX),
+    drag.winY + (e.screenY - drag.startMouseY)
+  );
+});
+
+window.addEventListener('mouseup', (e) => {
+  if (e.button === 0) drag = null;
+});
+
+// ------- ПКМ: меню у курсора -------
+window.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  window.ymc.ctxMenu();
+});
 
 // ------- клик-сквозь: рабочий стол = интерактив, приложения = сквозь -------
 let fgMode = 'window';
@@ -45,4 +83,3 @@ function updateIgnore() {
 }
 
 window.addEventListener('mouseout', () => updateIgnore());
-window.addEventListener('mousemove', () => updateIgnore());

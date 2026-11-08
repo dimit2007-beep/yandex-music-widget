@@ -34,14 +34,10 @@ html, body {
   align-items: center;
   justify-content: center;
   padding: 4px 10px;
-  -webkit-app-region: drag;
 }
 
-#hit-area {
-  position: absolute;
-  inset: 0;
-  -webkit-app-region: drag;
-}
+/* перетаскивание ручное (clock-renderer): курсор-рука */
+#plate { cursor: move; }
 
 #time {
   font-size: 42px;
@@ -54,7 +50,4 @@ html, body {
 }
 
 /* зафиксировано — перетаскивание запрещено */
-body.locked #plate,
-body.locked #hit-area {
-  -webkit-app-region: no-drag;
-}
+body.locked #plate { cursor: default; }

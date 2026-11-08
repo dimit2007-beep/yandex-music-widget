@@ -4,7 +4,8 @@
   "description": "Компактный виджет Яндекс Музыки для рабочего стола",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "clock": "electron . --clock"
   },
   "dependencies": {
     "ws": "^8.18.0"

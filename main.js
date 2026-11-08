@@ -5,6 +5,11 @@
  * - OAuth-вход с перехватом токена
  * - трей
  */
+// отдельное приложение «Часы» живёт в своём процессе (electron . --clock)
+if (process.argv.includes('--clock')) {
+  require('./clock-main');
+  return; // дальше — только музыкальный виджет
+}
 const {
   app,
   BrowserWindow,
@@ -22,8 +27,6 @@ const { YMApi } = require('./ym-api');
 const { SmtcWatcher, sendMediaKey } = require('./smtc');
 const { CdpWatcher, buildRestartPs } = require('./cdp');
 const { ForegroundWatcher } = require('./foreground');
-
-let clockWin = null; // окно часов
 
 // Логи в файл + безопасная консоль (EPIPE, если консоль.attach отвалилась)
 const logPath = () => path.join(app.getPath('userData'), 'widget.log');
@@ -58,26 +61,16 @@ let quitting = false;
 const userDir = app.getPath('userData');
 const tokenFile = path.join(userDir, 'token.json');
 const boundsFile = path.join(userDir, 'window.json');
-const clockBoundsFile = path.join(userDir, 'clock.json');
 const uiFile = path.join(userDir, 'ui.json');
 
 // настройки вида: buttons — показывать кнопки плеера, opacity — прозрачность фона плашки (%)
-// clock — отдельные настройки окна часов (opacity / locked)
 const DEFAULT_UI = { buttons: true, opacity: 25, locked: false };
-const DEFAULT_CLOCK = { opacity: 25, locked: false };
-
-function normalizeUi(u) {
-  const ui = { ...DEFAULT_UI, ...u };
-  if (!ui.clock || typeof ui.clock !== 'object') ui.clock = { ...DEFAULT_CLOCK };
-  else ui.clock = { ...DEFAULT_CLOCK, ...ui.clock };
-  return ui;
-}
 
 function loadUi() {
   try {
-    return normalizeUi(JSON.parse(fs.readFileSync(uiFile, 'utf8')));
+    return { ...DEFAULT_UI, ...JSON.parse(fs.readFileSync(uiFile, 'utf8')) };
   } catch (_) {
-    return { ...DEFAULT_UI, clock: { ...DEFAULT_CLOCK } };
+    return { ...DEFAULT_UI };
   }
 }
 
@@ -113,21 +106,6 @@ function saveBounds() {
   if (!win || win.isDestroyed()) return;
   try {
     fs.writeFileSync(boundsFile, JSON.stringify(win.getBounds()));
-  } catch (_) {}
-}
-
-function loadClockBounds() {
-  try {
-    return JSON.parse(fs.readFileSync(clockBoundsFile, 'utf8'));
-  } catch (_) {
-    return null;
-  }
-}
-
-function saveClockBounds() {
-  if (!clockWin || clockWin.isDestroyed()) return;
-  try {
-    fs.writeFileSync(clockBoundsFile, JSON.stringify(clockWin.getBounds()));
   } catch (_) {}
 }
 
@@ -471,83 +449,12 @@ function createWindow() {
   });
 }
 
-// ---------------- окно часов ----------------
-
-function createClockWindow() {
-  const bounds = loadClockBounds();
-  clockWin = new BrowserWindow({
-    width: 180,
-    height: 70,
-    useContentSize: true,
-    ...(bounds || {}),
-    minWidth: 120,
-    minHeight: 56,
-    frame: false,
-    resizable: true,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    transparent: true,
-    title: 'Часы',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload-clock.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
-  });
-  clockWin.setAlwaysOnTop(true, 'screen-saver');
-  clockWin.loadFile('clock.html');
-  // границы часов тоже запоминаем debounce'ом
-  let timer = null;
-  const saveSoon = () => {
-    clearTimeout(timer);
-    timer = setTimeout(saveClockBounds, 500);
-  };
-  clockWin.on('resize', saveSoon);
-  clockWin.on('move', saveSoon);
-  clockWin.on('close', saveClockBounds);
-  clockWin.applyUi = (cu) => {
-    if (clockWin.isDestroyed()) return;
-    clockWin.setMovable(!cu.locked);
-    clockWin.setResizable(!cu.locked);
-  };
-  clockWin.applyUi(loadUi().clock);
-  clockWin.webContents.on('did-finish-load', () => {
-    if (clockWin && !clockWin.isDestroyed()) {
-      clockWin.webContents.send('yp:clockui', loadUi().clock);
-    }
-  });
-  // ПКМ по часам — то же меню
-  clockWin.webContents.on('context-menu', (e) => {
-    e.preventDefault();
-    buildTrayMenu().popup({ window: clockWin });
-  });
-}
-
-function toggleClockWin() {
-  if (!clockWin || clockWin.isDestroyed()) {
-    createClockWindow();
-    return;
-  }
-  if (clockWin.isVisible()) clockWin.hide();
-  else clockWin.show();
-}
-
 function applyUi(patch) {
-  const ui = { ...loadUi() };
-  if (patch.clock) {
-    ui.clock = { ...ui.clock, ...patch.clock }; // настройки часов мерджим отдельно
-    delete patch.clock;
-  }
-  const ui2 = { ...ui, ...patch };
-  saveUi(ui2);
+  const ui = { ...loadUi(), ...patch };
+  saveUi(ui);
   if (tray) tray.setContextMenu(buildTrayMenu());
-  if (win && win.applyUi) win.applyUi(ui2);
-  pushToRenderer('yp:ui', ui2);
-  if (clockWin && !clockWin.isDestroyed()) {
-    if (clockWin.applyUi) clockWin.applyUi(ui2.clock);
-    clockWin.webContents.send('yp:clockui', ui2.clock);
-  }
+  if (win && win.applyUi) win.applyUi(ui);
+  pushToRenderer('yp:ui', ui);
 }
 
 // принудительный перезапуск ЯМ из меню (с портом отладки; поднимает, если закрыта)
@@ -595,23 +502,6 @@ function buildTrayMenu() {
       click: () => applyUi({ locked: !loadUi().locked }),
     },
     { type: 'separator' },
-    { label: 'Показать/скрыть часы', click: toggleClockWin },
-    {
-      label: 'Прозрачность фона часов',
-      submenu: OPACITIES.map((v) => ({
-        label: v >= 100 ? 'Непрозрачный (100%)' : v === 0 ? 'Полностью прозрачный (0%)' : `Дымка ${v}%`,
-        type: 'checkbox',
-        checked: ui.clock.opacity === v,
-        click: () => applyUi({ clock: { opacity: v } }),
-      })),
-    },
-    {
-      label: 'Зафиксировать положение часов',
-      type: 'checkbox',
-      checked: !!ui.clock.locked,
-      click: () => applyUi({ clock: { locked: !loadUi().clock.locked } }),
-    },
-    { type: 'separator' },
     { label: 'Перезапустить Яндекс Музыку', click: restartYmNow },
     { label: 'Вход через Яндекс…', click: openLogin },
     { label: 'Сбросить токен (выйти)', click: logout },
@@ -643,16 +533,9 @@ function toggleWin() {
 // текущие настройки вида (кнопки/прозрачность)
 ipcMain.handle('ui:getUi', () => loadUi());
 
-// клик-сквозь: различаем, из какого окна пришёл запрос
-// true = пропускать клики (кроме моментов наведения на кнопки)
-ipcMain.handle('ui:ignoreMouse', (e, v) => {
-  const target =
-    win && !win.isDestroyed() && e.sender === win.webContents
-      ? win
-      : clockWin && !clockWin.isDestroyed() && e.sender === clockWin.webContents
-        ? clockWin
-        : null;
-  if (target) target.setIgnoreMouseEvents(!!v, { forward: true });
+// клик-сквозь окна виджета: true = пропускать клики (кроме наведения на кнопки)
+ipcMain.handle('ui:ignoreMouse', (_e, v) => {
+  if (win && !win.isDestroyed()) win.setIgnoreMouseEvents(!!v, { forward: true });
 });
 
 // приоритет: свежий Ynison → CDP (десктоп-ЯМ) → системные media-клавиши
@@ -711,7 +594,6 @@ app.whenReady().then(() => {
   // а через setLoginItemSettings не прописываем: он создавал безымянный
   // реестровый ключ Run без иконки.
   createWindow();
-  createClockWindow();
   createTray();
   startServices();
   // резервный источник «что играет» — Windows SMTC (работает без токена)
@@ -721,14 +603,12 @@ app.whenReady().then(() => {
   const fg = new ForegroundWatcher((mode) => {
     const m = mode === 'desktop' ? 'desktop' : 'window';
     if (win && !win.isDestroyed()) win.webContents.send('yp:fgmode', m);
-    if (clockWin && !clockWin.isDestroyed()) clockWin.webContents.send('yp:fgmode', m);
   });
   fg.start();
 });
 
 app.on('before-quit', () => {
   saveBounds();
-  saveClockBounds();
   quitting = true;
 });
 
