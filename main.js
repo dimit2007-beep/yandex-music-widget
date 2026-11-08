@@ -175,15 +175,24 @@ async function deliverState(st, source) {
       } catch (_) {}
     }
   }
-  // CDP не даёт trackId — ищем трек по названию (нужен для лайка через REST)
+  // CDP не даёт trackId — ищем трек по названию (каноничный title + для лайка)
   if (!trackId && st.title && api) {
     trackId = await api
       .findTrack(st.title, typeof artists === 'string' ? artists : null)
       .catch(() => null);
+    if (trackId && !track) {
+      track = await api.getTrack(trackId).catch(() => null); // каноничное имя трека
+    }
+  }
+  // Засада: бар приложения иногда даёт «Артисты — Трек» одним полем.
+  // Если REST-трека нет, но строка начинается с артистов — отрежем префикс.
+  let title = (track && track.title) || st.title || null;
+  if (!track && title && artists && typeof artists === 'string' && title.startsWith(artists)) {
+    title = title.slice(artists.length).replace(/^[\s—–-]+/, '');
   }
   pushToRenderer('yp:state', {
     trackId,
-    title: (track && track.title) || st.title || null,
+    title,
     artists,
     album: (track && track.album) || st.album || null,
     cover: (track && track.cover) || st.cover || null,
