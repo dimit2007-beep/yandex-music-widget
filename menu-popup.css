@@ -1,0 +1,71 @@
+:root {
+  --menu-bg: #232327;
+  --menu-hover: #3b3b41;
+  --text: #f2f2f5;
+  --dim: #b9b9c2;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  background: transparent;
+  overflow: hidden; /* подменю временно шире окна — скроллбары не показываем (полосы как в браузере) */
+  font-family: "Segoe UI", system-ui, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* на всякий случай: никакие полосы прокрутки в меню не нужны */
+::-webkit-scrollbar { width: 0; height: 0; }
+
+#menu {
+  background: var(--menu-bg);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  padding: 5px;
+  min-width: 210px;
+  width: max-content; /* иначе меню растягивается на ширину окна и циклится */
+}
+
+.mi {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.mi:hover { background: var(--menu-hover); }
+
+.mi .check {
+  width: 14px;
+  text-align: center;
+  color: #73d2ff;
+  visibility: hidden;
+}
+
+.mi.checked .check { visibility: visible; }
+
+.mi .arr { margin-left: auto; color: var(--dim); font-size: 11px; }
+
+.msep { height: 1px; background: rgba(255, 255, 255, 0.09); margin: 5px 8px; }
+
+.msub {
+  position: absolute;
+  background: var(--menu-bg);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  padding: 5px;
+  display: none;
+  z-index: 2;
+}
+
+.msub.open { display: block; }
+
+.mi.has-sub:hover { background: var(--menu-hover); }

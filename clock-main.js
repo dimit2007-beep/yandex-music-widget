@@ -13,9 +13,16 @@ const {
   ipcMain,
   nativeTheme,
 } = require('electron');
+app.disableHardwareAcceleration(); // иначе новые окна (popup-меню) не получают кадры (GPU-фриз)
 const path = require('path');
 const fs = require('fs');
 const { ForegroundWatcher } = require('./foreground');
+const { openMenuPopup } = require('./menu-popup');
+
+// диагностика падений дочерних процессов Chromium (renderer/gpu)
+app.on('child-process-gone', (_e, details) => {
+  log('!!! child-process-gone: type=' + details.type + ' reason=' + details.reason + ' exit=' + details.exitCode);
+});
 
 const userDir = app.getPath('userData');
 const boundsFile = path.join(userDir, 'clock.json'); // границы окна
@@ -158,10 +165,45 @@ ipcMain.handle('ui:getUi', () => loadUi());
 ipcMain.handle('ui:ignoreMouse', (_e, v) => {
   if (win && !win.isDestroyed()) win.setIgnoreMouseEvents(!!v, { forward: true });
 });
-// ПКМ по часам: меню у курсора (окно без drag-областей, поэтому событие доходит)
-ipcMain.handle('ymc:ctxmenu', () => {
+// пункты меню часов для popup-окна
+function buildClockMenuItems(ui) {
+  return [
+    { id: 'toggle', label: 'Показать/скрыть часы' },
+    { type: 'sep' },
+    {
+      id: 'opacity',
+      label: 'Прозрачность фона',
+      items: OPACITIES.map((v) => ({
+        id: 'opacity-' + v,
+        label: v >= 100 ? 'Непрозрачный (100%)' : v === 0 ? 'Полностью прозрачный (0%)' : `Дымка ${v}%`,
+        checked: ui.opacity === v,
+      })),
+    },
+    { id: 'lock', label: 'Зафиксировать положение', checked: !!ui.locked },
+    { type: 'sep' },
+    { id: 'close', label: 'Закрыть часы' },
+  ];
+}
+
+// ПКМ по часам — popup-меню у курсора (закрывается любым кликом снаружи)
+ipcMain.handle('ymc:ctxmenu', (_e, pt) => {
   if (!win || win.isDestroyed()) return;
-  buildUiMenu().popup({ window: win });
+  openMenuPopup({
+    x: pt && pt.x,
+    y: pt && pt.y,
+    payload: { items: buildClockMenuItems(loadUi()) },
+    onPick: (id) => {
+      if (id === 'toggle') return toggleWin();
+      if (id === 'lock') return applyUi({ locked: !loadUi().locked });
+      if (id === 'close') {
+        quitting = true;
+        app.quit();
+        return;
+      }
+      const m = /^opacity-(\d+)$/.exec(id);
+      if (m) return applyUi({ opacity: Number(m[1]) });
+    },
+  });
 });
 // ручное перетаскивание (drag-area глотает правый клик, поэтому двигаем сами)
 ipcMain.on('ymc:moveTo', (_e, x, y) => {

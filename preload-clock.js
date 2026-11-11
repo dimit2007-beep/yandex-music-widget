@@ -7,7 +7,7 @@ contextBridge.exposeInMainWorld('ymc', {
   uiState: () => ipcRenderer.invoke('ui:getUi'),
   ignoreMouse: (v) => ipcRenderer.invoke('ui:ignoreMouse', v),
   // ПКМ по часам — открыть меню у курсора
-  ctxMenu: () => ipcRenderer.invoke('ymc:ctxmenu'),
+  ctxMenu: (pt) => ipcRenderer.invoke('ymc:ctxmenu', pt),
   // отладка в лог основного процесса
   log: (msg) => ipcRenderer.send('ymc:log', String(msg)),
   moveTo: (x, y) => ipcRenderer.send('ymc:moveTo', x, y),

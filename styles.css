@@ -60,10 +60,9 @@ html, body {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 
-/* перетаскивание окна за пустые места */
-#widget, #hit-area { -webkit-app-region: drag; }
-button, input { -webkit-app-region: no-drag; }
-#hit-area { position: absolute; inset: 0; }
+/* перетаскивание ручное (renderer.js): drag-области глотали ПКМ и показывали системное меню */
+#hit-area { position: absolute; inset: 0; pointer-events: none; }
+#widget { cursor: move; }
 #auth-view { position: relative; }
 
 /* ---------- данные ---------- */
@@ -157,9 +156,7 @@ button, input { -webkit-app-region: no-drag; }
 .no-buttons #controls { display: none; }
 
 /* зафиксировано — перетаскивание запрещено (из трея или ПКМ) */
-body.locked #widget,
-body.locked #hit-area {
-  -webkit-app-region: no-drag;
+body.locked #widget {
   cursor: default;
 }
 

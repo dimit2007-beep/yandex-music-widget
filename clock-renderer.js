@@ -68,10 +68,10 @@ window.addEventListener('mouseup', (e) => {
   }
 });
 
-// ------- ПКМ: меню у курсора -------
+// ПКМ по часам: меню у курсора
 window.addEventListener('contextmenu', (e) => {
   e.preventDefault();
-  window.ymc.ctxMenu();
+  window.ymc.ctxMenu({ x: e.screenX, y: e.screenY });
 });
 
 // ------- клик-сквозь: рабочий стол = интерактив, приложения = сквозь -------

@@ -17,4 +17,18 @@ contextBridge.exposeInMainWorld('ym', {
   setLike: (trackId, liked) => ipcRenderer.invoke('ctl:setLike', trackId, liked),
   login: () => ipcRenderer.invoke('ui:login'),
   authState: () => ipcRenderer.invoke('ui:getAuthState'),
+
+  // ПКМ по виджету: открыть popup-меню у курсора
+  openMenu: (x, y) => ipcRenderer.invoke('ym:openMenu', x, y),
+
+  // настройки и действия меню (ПКМ)
+  applyUi: (patch) => ipcRenderer.invoke('ym:applyUi', patch),
+  toggleWin: () => ipcRenderer.invoke('ym:toggleWin'),
+  restartYm: () => ipcRenderer.invoke('ym:restartYm'),
+  logout: () => ipcRenderer.invoke('ym:logout'),
+  quit: () => ipcRenderer.invoke('ym:quit'),
+
+  // ручное перетаскивание (drag-области глотали ПКМ)
+  getPosition: () => ipcRenderer.invoke('ym:getPosition'),
+  moveTo: (x, y) => ipcRenderer.send('ym:moveTo', x, y),
 });

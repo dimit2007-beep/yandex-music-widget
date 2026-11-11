@@ -20,7 +20,7 @@ while ($true) {
   $sb = New-Object System.Text.StringBuilder 256
   [FG]::GetClassName($h, $sb, 256) | Out-Null
   $cls = $sb.ToString()
-  $mode = if ($cls -eq 'Progman' -or $cls -eq 'WorkerW' -or $cls -eq 'SHELLDLL_DefView') { 'desktop' } else { 'window' }
+  $mode = if ($cls -eq 'Progman' -or $cls -eq 'WorkerW' -or $cls -eq 'SHELLDLL_DefView' -or $cls.StartsWith('XamlExplorerHostIslandWindow')) { 'desktop' } else { 'window' }
   if ($mode -ne $last) {
     $last = $mode
     [Console]::Out.WriteLine($mode)

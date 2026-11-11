@@ -121,7 +121,13 @@ class CdpWatcher {
     if (this.stopped) return;
     try {
       const list = await this._targets();
-      const page = list.find((t) => t.type === 'page' && (t.url || '').startsWith('music-application://'));
+      // ВАЖНО: у приложения несколько page-таргетов (главное окно + мини/фулскрин
+      // плеер) с разными состояниями. Порядок в /json может меняться — если
+      // каждый тик брать первый попавшийся, мы переподключаемся и получаем
+      // противоречивые состояния (иконка паузы мигает). Держимся за уже
+      // подключённый таргет, пока он жив.
+      const page = list.find((t) => t.type === 'page' && t.id === this.targetId)
+        || list.find((t) => t.type === 'page' && (t.url || '').startsWith('music-application://'));
       if (!page) return;
       if (!this.ws || this.targetId !== page.id) {
         this._closeWs();

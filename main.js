@@ -19,6 +19,7 @@ const {
   nativeImage,
   nativeTheme,
 } = require('electron');
+app.disableHardwareAcceleration(); // иначе новые окна иногда не получают кадры (GPU-фриз)
 const path = require('path');
 const fs = require('fs');
 const zlib = require('zlib');
@@ -27,6 +28,12 @@ const { YMApi } = require('./ym-api');
 const { SmtcWatcher, sendMediaKey } = require('./smtc');
 const { CdpWatcher, buildRestartPs } = require('./cdp');
 const { ForegroundWatcher } = require('./foreground');
+const { openMenuPopup } = require('./menu-popup');
+
+// диагностика падений дочерних процессов Chromium (renderer/gpu)
+app.on('child-process-gone', (_e, details) => {
+  console.log('!!! child-process-gone: type=' + details.type + ' reason=' + details.reason + ' exit=' + details.exitCode);
+});
 
 // Логи в файл + безопасная консоль (EPIPE, если консоль.attach отвалилась)
 const logPath = () => path.join(app.getPath('userData'), 'widget.log');
@@ -121,6 +128,7 @@ let lastAlbumHash = null;
 let ymRelaunchedAt = 0; // ставим перезапуск ЯМ не чаще раза в 10 минут
 
 function startServices() {
+  if (process.env.YM_NO_SVCS) return; // отладка: без служб (проверка рендера меню)
   stopServices();
   const token = loadToken();
   api = new YMApi(token); // даже без токена SMTC всё равно показывает трек
@@ -443,10 +451,61 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => {
     pushToRenderer('yp:ui', loadUi()); // применить сохранённый вид
   });
-  // ПКМ по виджету — то же меню, что и у значка в трее
-  win.webContents.on('context-menu', (e) => {
-    e.preventDefault();
-    buildTrayMenu().popup({ window: win });
+  // ПКМ по виджету — popup-меню у курсора (renderer шлёт координаты)
+  // (сам renderer вызывает 'ym:openMenu'; см. IPC-секцию)
+}
+
+// пункты ПКМ-меню виджета для popup-окна
+function buildMusicMenuItems(ui, authorized) {
+  const OPACITIES = [0, 5, 10, 25, 40, 60, 80, 100];
+  const items = [
+    { id: 'toggle', label: 'Показать/скрыть' },
+    { type: 'sep' },
+    { id: 'buttons', label: 'Показывать кнопки', checked: !!ui.buttons },
+    {
+      id: 'opacity',
+      label: 'Прозрачность фона',
+      items: OPACITIES.map((v) => ({
+        id: 'opacity-' + v,
+        label: v >= 100 ? 'Непрозрачный (100%)' : v === 0 ? 'Полностью прозрачный (0%)' : `Дымка ${v}%`,
+        checked: ui.opacity === v,
+      })),
+    },
+    { id: 'lock', label: 'Зафиксировать положение', checked: !!ui.locked },
+    { type: 'sep' },
+    { id: 'restart', label: 'Перезапустить Яндекс Музыку' },
+    ...(authorized
+      ? [{ id: 'logout', label: 'Сбросить токен (выйти)' }]
+      : [{ id: 'login', label: 'Вход через Яндекс…' }]),
+    { type: 'sep' },
+    { id: 'quit', label: 'Закрыть виджет' },
+  ];
+  return items;
+}
+
+function onMusicMenuPick(id) {
+  if (id === 'toggle') return toggleWin();
+  if (id === 'buttons') return applyUi({ buttons: !loadUi().buttons });
+  if (id === 'lock') return applyUi({ locked: !loadUi().locked });
+  if (id === 'restart') return restartYmNow();
+  if (id === 'login') return openLogin();
+  if (id === 'logout') return logout();
+  if (id === 'quit') {
+    quitting = true;
+    app.quit();
+    return;
+  }
+  const m = /^opacity-(\d+)$/.exec(id);
+  if (m) return applyUi({ opacity: Number(m[1]) });
+}
+
+// меню поверх нефокусируемого окна: на время открытия делаем окно фокусируемым,
+// иначе меню не захватывает клики и не закрывается кликом в сторону
+function popupOn(wnd, menu) {
+  try { wnd.setFocusable(true); } catch (_) {}
+  menu.popup({ window: wnd });
+  menu.once('menu-will-close', () => {
+    try { wnd.setFocusable(false); } catch (_) {}
   });
 }
 
@@ -539,6 +598,38 @@ ipcMain.handle('ui:ignoreMouse', (_e, v) => {
   if (win && !win.isDestroyed()) win.setIgnoreMouseEvents(!!v, { forward: true });
 });
 
+// пункты ПКМ-меню (меню теперь рисует сам renderer, а тут исполнение)
+ipcMain.handle('ym:applyUi', (_e, patch) => applyUi(patch));
+ipcMain.handle('ym:toggleWin', () => toggleWin());
+ipcMain.handle('ym:restartYm', () => restartYmNow());
+ipcMain.handle('ym:logout', () => logout());
+ipcMain.handle('ym:quit', () => { quitting = true; app.quit(); });
+
+// ПКМ: popup-меню у курсора (закрывается любым кликом снаружи)
+ipcMain.handle('ym:openMenu', async (_e, x, y) => {
+  if (!win || win.isDestroyed()) return;
+  openMenuPopup({
+    x: Number(x),
+    y: Number(y),
+    payload: { items: buildMusicMenuItems(loadUi(), !!loadToken()) },
+    onPick: onMusicMenuPick,
+  });
+});
+
+// ручное перетаскивание
+ipcMain.handle('ym:getPosition', () => {
+  if (!win || win.isDestroyed()) return null;
+  return win.getPosition();
+});
+ipcMain.on('ym:moveTo', (_e, x, y) => {
+  if (!win || win.isDestroyed()) return;
+  if (loadUi().locked) return; // зафиксировано — не двигаем
+  const nx = Math.round(Number(x));
+  const ny = Math.round(Number(y));
+  if (!Number.isFinite(nx) || !Number.isFinite(ny)) return;
+  win.setPosition(nx, ny, false);
+});
+
 // приоритет: свежий Ynison → CDP (десктоп-ЯМ) → системные media-клавиши
 let ctlCtl;
 function chooseCtl() {
@@ -598,14 +689,16 @@ app.whenReady().then(() => {
   createTray();
   startServices();
   // резервный источник «что играет» — Windows SMTC (работает без токена)
-  const smtc = new SmtcWatcher(onSmtcState);
-  smtc.start();
-  // рабочий стол vs другие окна — управление click-through
-  const fg = new ForegroundWatcher((mode) => {
-    const m = mode === 'desktop' ? 'desktop' : 'window';
-    if (win && !win.isDestroyed()) win.webContents.send('yp:fgmode', m);
-  });
-  fg.start();
+  if (!process.env.YM_NO_SVCS) {
+    const smtc = new SmtcWatcher(onSmtcState);
+    smtc.start();
+    // рабочий стол vs другие окна — управление click-through
+    const fg = new ForegroundWatcher((mode) => {
+      const m = mode === 'desktop' ? 'desktop' : 'window';
+      if (win && !win.isDestroyed()) win.webContents.send('yp:fgmode', m);
+    });
+    fg.start();
+  }
 });
 
 app.on('before-quit', () => {

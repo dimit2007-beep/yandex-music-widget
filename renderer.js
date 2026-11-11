@@ -65,8 +65,10 @@ function renderState(s) {
     els.cover.style.visibility = 'hidden';
   }
   els.like.classList.toggle('liked', !!s.liked);
-  els.icPlay.hidden = !s.paused;
-  els.icPause.hidden = !!s.paused;
+  // ВАЖНО: ic-play/ic-pause — это <svg> (SVGElement), у него НЕТ свойства
+  // .hidden — присваивание молча ничего не делает. Переключаем атрибут.
+  els.icPlay.toggleAttribute('hidden', !s.paused);
+  els.icPause.toggleAttribute('hidden', !!s.paused);
   els.time.textContent = fmt(s.progressMs) + ' / ' + fmt(s.durationMs);
 }
 
@@ -102,6 +104,12 @@ els.like.addEventListener('click', async () => {
   else els.like.classList.toggle('liked', !target); // откат, если сорвалось
 });
 els.login.addEventListener('click', () => window.ym.login());
+
+// ПКМ по виджету: popup-меню у курсора
+window.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  window.ym.openMenu(e.screenX, e.screenY);
+});
 
 // старт
 window.ym.authState().then((a) => {
@@ -153,7 +161,42 @@ function applyUi(u) {
   document.getElementById('widget').style.backdropFilter = blur ? `blur(${blur}px)` : 'none';
   document.body.classList.toggle('no-buttons', u.buttons === false);
   document.body.classList.toggle('locked', !!u.locked);
+  uiLocked = !!u.locked;
 }
+
+// ------- ручное перетаскивание (drag-области глотали ПКМ, показывали системное меню) -------
+
+let uiLocked = false;
+let drag = null; // { startMouseX, startMouseY, winX, winY }
+
+window.addEventListener('mousedown', (e) => {
+  if (e.button !== 0 || uiLocked) return;
+  // кнопки плеера и кнопка входа — не драг (там клики)
+  if (e.target.closest('button, #btn-login')) return;
+  window.ym.getPosition().then((pos) => {
+    if (!pos || pos.length < 2) return;
+    const [px, py] = pos;
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return;
+    drag = { startMouseX: e.screenX, startMouseY: e.screenY, winX: px, winY: py };
+  }).catch(() => {});
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!drag) return;
+  if (e.buttons !== 1 || uiLocked) {
+    drag = null;
+    return;
+  }
+  if (!Number.isFinite(e.screenX) || !Number.isFinite(e.screenY)) return;
+  window.ym.moveTo(
+    drag.winX + (e.screenX - drag.startMouseX),
+    drag.winY + (e.screenY - drag.startMouseY)
+  );
+});
+
+window.addEventListener('mouseup', (e) => {
+  if (e.button === 0) drag = null;
+});
 
 window.ym.onUi(applyUi);
 window.ym.uiState().then(applyUi).catch(() => {});
