@@ -19,6 +19,7 @@ const els = {
 };
 
 let state = null; // последнее состояние от главного процесса
+let coverShown = null; // URL обложки, применённый к <img> последним
 let authorized = false;
 
 // плавный прогресс между обновлениями Ynison
@@ -45,8 +46,7 @@ function fmt(ms) {
 }
 
 function renderState(s) {
-  state = s;
-  if (s.title) {
+  state = s;  if (s.title) {
     els.title.textContent = s.title;
     els.title.title = s.title + (s.album ? ' · ' + s.album : '');
   } else {
@@ -55,13 +55,17 @@ function renderState(s) {
   }
   els.artist.textContent = s.artists || 'Пока тишина…';
   if (s.cover) {
-    if (!els.cover.src || !els.cover.src.endsWith(s.cover.split('/').pop())) {
-      els.cover.src = s.cover; // обновляем только при смене трека
+    // сравниваем ПОЛНЫЙ URL: последний сегмент у всех обложек ЯМ —
+    // размер («400x400»), по нему смена не определялась и картинка залипала
+    if (coverShown !== s.cover) {
+      els.cover.src = s.cover; // обновляем только при смене обложки (иначе перезапрос)
+      coverShown = s.cover;
     }
     els.cover.style.visibility = 'visible';
   } else {
     // нет данных об обложке в этом состоянии — не показываем чужую устаревшую
     els.cover.removeAttribute('src');
+    coverShown = null;
     els.cover.style.visibility = 'hidden';
   }
   els.like.classList.toggle('liked', !!s.liked);
