@@ -123,8 +123,6 @@ window.ym.authState().then((a) => {
 let fgMode = 'window';
 let ignoreMouse = null; // текущее посланное состояние
 
-const HOVER_SELECTOR = 'button, #btn-login'; // наведение на эти элементы пробуждает виджет
-
 window.ym.onFgMode((mode) => {
   fgMode = mode;
   updateIgnore();
@@ -135,11 +133,15 @@ function hoveredInteractive(x, y) {
   const el = document.elementFromPoint(x, y);
   if (!el) return false;
   if (!fgMode) return false;
-  return !!el.closest('button, #btn-login');
+  // курсор над любой частью виджета — виджет целиком интерактивен.
+  // Раньше интерактивны были только кнопки, и тогда ПКМ-меню было
+  // недоступно при активном другом окне (клик уходил сквозь виджет)
+  return true;
 }
 
 function updateIgnore(hover) {
-  // desktop: интерактивно всё; window: сквозь всё, кроме наведения на кнопки
+  if (drag) return; // не переключать во время собственного перетаскивания
+  // desktop: интерактивно всё; window: сквозь всё, когда курсор не над виджетом
   const should = fgMode === 'desktop' ? false : !hover;
   if (should !== ignoreMouse) {
     ignoreMouse = should;

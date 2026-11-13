@@ -83,15 +83,17 @@ window.ymc.onFgMode((mode) => {
   updateIgnore();
 });
 
-function updateIgnore() {
+function updateIgnore(hover) {
   // во время перетаскивания не включаем клик-сквозь — иначе жест рвётся
   if (drag) return;
-  // у часов нет интерактивных элементов: интерактивен только рабочий стол
-  const should = fgMode === 'desktop' ? false : true;
+  // рабочий стол = часы интерактивны; при активном окне — интерактивны
+  // под курсором (иначе ПКМ-меню и перетаскивание недоступны)
+  const should = fgMode === 'desktop' ? false : !hover;
   if (should !== ignoreMouse) {
     ignoreMouse = should;
     window.ymc.ignoreMouse(should);
   }
 }
 
-window.addEventListener('mouseout', () => updateIgnore());
+window.addEventListener('mousemove', () => updateIgnore(true)); // курсор над часами — интерактивны
+window.addEventListener('mouseout', () => updateIgnore(false));

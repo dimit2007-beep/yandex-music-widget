@@ -1,7 +1,7 @@
 /**
  * Главный процесс Electron:
  * - компактное окно поверх всех окон
- * -ервисы Ynison (текущий трек) и REST API (мета, лайки)
+ * - локальное состояние: CDP (интерфейс ЯМ) + Windows SMTC; REST API (лайки, поиск)
  * - OAuth-вход с перехватом токена
  * - трей
  */
@@ -23,7 +23,6 @@ app.disableHardwareAcceleration(); // иначе новые окна иногд�
 const path = require('path');
 const fs = require('fs');
 const zlib = require('zlib');
-const { Ynison } = require('./ynison');
 const { YMApi } = require('./ym-api');
 const { SmtcWatcher, sendMediaKey } = require('./smtc');
 const { CdpWatcher, buildRestartPs } = require('./cdp');
@@ -59,7 +58,6 @@ const OAUTH_URL =
 let win = null;
 let oauthWin = null;
 let tray = null;
-let ynison = null;
 let api = null;
 let cdpWatcher = null;
 let ymRestartTimer = null;
@@ -122,7 +120,6 @@ function pushToRenderer(channel, payload) {
 
 // ---------------- сервисы ----------------
 
-let lastYnisonAt = 0; // свежесть Ynison-состояния (если актуально — приоритет над SMTC)
 let lastCdpAt = 0;
 let lastAlbumHash = null;
 let ymRelaunchedAt = 0; // ставим перезапуск ЯМ не чаще раза в 10 минут
@@ -133,10 +130,8 @@ function startServices() {
   const token = loadToken();
   api = new YMApi(token); // даже без токена SMTC всё равно показывает трек
   pushToRenderer('yp:auth', { ok: !!token });
-  if (token) {
-    ynison = new Ynison(token, onYnisonState);
-    ynison.start();
-  }
+  // Ynison (серверный пуш «что играет на устройствах») убран: виджет берёт
+  // музыку только с этого ПК — CDP из самого приложения ЯМ + SMTC как резерв
   if (!cdpWatcher) {
     cdpWatcher = new CdpWatcher(onCdpState);
     cdpWatcher.start();
@@ -146,10 +141,6 @@ function startServices() {
 }
 
 function stopServices() {
-  if (ynison) {
-    ynison.stop();
-    ynison = null;
-  }
   if (cdpWatcher) {
     cdpWatcher.stop();
     cdpWatcher = null;
@@ -159,11 +150,10 @@ function stopServices() {
     ymRestartTimer = null;
   }
   api = null;
-  lastYnisonAt = 0;
   lastCdpAt = 0;
 }
 
-// единая отправка состояния (Ynison / CDP / SMTC + обогащение из REST)
+// сбор состояния: CDP / SMTC + обогащение через REST
 async function deliverState(st, source) {
   let track = null;
   let liked = st.liked === true || false;
@@ -242,7 +232,6 @@ function ensureYmDebugPort() {
 }
 
 async function onCdpState(st) {
-  if (Date.now() - lastYnisonAt < 45000) return; // Ynison приоритетнее
   lastCdpAt = Date.now();
   await deliverState(
     {
@@ -261,31 +250,15 @@ async function onCdpState(st) {
   );
 }
 
-async function onYnisonState(st) {
-  lastYnisonAt = Date.now();
-  await deliverState(
-    {
-      trackId: st.trackId,
-      progressMs: st.progressMs,
-      playbackSpeed: st.playbackSpeed,
-      timestampMs: st.timestampMs,
-      receivedAt: st.receivedAt,
-      paused: st.paused,
-    },
-    'ynison'
-  );
-}
-
 async function onSmtcState(st) {
   if (!st) {
-    // «ничего не играет»: если и CDP давно молчит (ЯМ закрыт) и Ynison свежим
-    // не был — гасим плашку до «Пока тишина…», а не держим застывший трек
-    if (Date.now() - lastCdpAt > 15000 && Date.now() - lastYnisonAt > 45000) {
+    // «ничего не играет»: если CDP давно молчит (ЯМ закрыт) — гасим плашку
+    // до «Пока тишина…», а не держим застывший трек
+    if (Date.now() - lastCdpAt > 15000) {
       await deliverState({ trackId: null, title: null, paused: true }, 'empty');
     }
     return;
   }
-  if (Date.now() - lastYnisonAt < 45000) return; // Ynison актуален — пропускаем
   await deliverState(
     {
       trackId: null,
@@ -473,7 +446,7 @@ function buildMusicMenuItems(ui, authorized) {
     },
     { id: 'lock', label: 'Зафиксировать положение', checked: !!ui.locked },
     { type: 'sep' },
-    { id: 'restart', label: 'Перезапустить Яндекс Музыку' },
+    { id: 'restart', label: 'Перезапустить виджет' },
     ...(authorized
       ? [{ id: 'logout', label: 'Сбросить токен (выйти)' }]
       : [{ id: 'login', label: 'Вход через Яндекс…' }]),
@@ -487,7 +460,7 @@ function onMusicMenuPick(id) {
   if (id === 'toggle') return toggleWin();
   if (id === 'buttons') return applyUi({ buttons: !loadUi().buttons });
   if (id === 'lock') return applyUi({ locked: !loadUi().locked });
-  if (id === 'restart') return restartYmNow();
+  if (id === 'restart') return restartWidgetNow();
   if (id === 'login') return openLogin();
   if (id === 'logout') return logout();
   if (id === 'quit') {
@@ -515,6 +488,23 @@ function applyUi(patch) {
   if (tray) tray.setContextMenu(buildTrayMenu());
   if (win && win.applyUi) win.applyUi(ui);
   pushToRenderer('yp:ui', ui);
+}
+
+// перезапуск виджета: прямой detached-спавн нового экземпляра electron.
+// (app.relaunch передаёт аргументы с чужим cwd и падает; запуск через
+// detached powershell не выживает, когда родитель сразу выходит из app.quit —
+// проверено тестом: прямой спавн переживает, powershell-прослойка умирает)
+function restartWidgetNow() {
+  quitting = true;
+  const { spawn } = require('child_process');
+  const child = spawn(process.execPath, [__dirname], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.on('error', (e) => console.error('[restart] spawn error: ' + (e.stack || e.message)));
+  child.unref();
+  app.quit();
 }
 
 // принудительный перезапуск ЯМ из меню (с портом отладки; поднимает, если закрыта)
@@ -562,7 +552,7 @@ function buildTrayMenu() {
       click: () => applyUi({ locked: !loadUi().locked }),
     },
     { type: 'separator' },
-    { label: 'Перезапустить Яндекс Музыку', click: restartYmNow },
+    { label: 'Перезапустить виджет', click: restartWidgetNow },
     { label: 'Вход через Яндекс…', click: openLogin },
     { label: 'Сбросить токен (выйти)', click: logout },
     { type: 'separator' },
@@ -630,36 +620,31 @@ ipcMain.on('ym:moveTo', (_e, x, y) => {
   win.setPosition(nx, ny, false);
 });
 
-// приоритет: свежий Ynison → CDP (десктоп-ЯМ) → системные media-клавиши
+// управление: CDP (клики в приложении), затем системные media-клавиши
 let ctlCtl;
 function chooseCtl() {
   if (cdpWatcher && cdpWatcher.fresh && Date.now() - lastCdpAt < 30000) return 'cdp';
-  if (ynison && Date.now() - lastYnisonAt < 45000) return 'ynison';
   return 'keys';
 }
 
 ipcMain.handle('ctl:pause', async () => {
   const c = chooseCtl();
   if (c === 'cdp') return cdpWatcher.playPause();
-  if (c === 'ynison') return ynison.pause();
   sendMediaKey('playPause');
 });
 ipcMain.handle('ctl:play', async () => {
   const c = chooseCtl();
   if (c === 'cdp') return cdpWatcher.playPause();
-  if (c === 'ynison') return ynison.play();
   sendMediaKey('playPause');
 });
 ipcMain.handle('ctl:next', async () => {
   const c = chooseCtl();
   if (c === 'cdp') return cdpWatcher.next();
-  if (c === 'ynison') return ynison.next();
   sendMediaKey('next');
 });
 ipcMain.handle('ctl:prev', async () => {
   const c = chooseCtl();
   if (c === 'cdp') return cdpWatcher.prev();
-  if (c === 'ynison') return ynison.prev();
   sendMediaKey('prev');
 });
 ipcMain.handle('ctl:setLike', async (_e, trackId, liked) => {
