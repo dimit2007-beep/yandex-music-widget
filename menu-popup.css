@@ -19,6 +19,7 @@ html, body {
 ::-webkit-scrollbar { width: 0; height: 0; }
 
 #menu {
+  position: absolute; /* renderer кладёт меню в окне (запас под подменю по бокам) */
   background: var(--menu-bg);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;

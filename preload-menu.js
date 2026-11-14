@@ -7,4 +7,6 @@ contextBridge.exposeInMainWorld('mnu', {
   pick: (id) => ipcRenderer.invoke('menu:pick', id),
   close: () => ipcRenderer.invoke('menu:close'),
   log: (s) => ipcRenderer.send('menu:log', String(s)),
+  // клик-сквозь прозрачных полей окна меню
+  ignoreMouse: (v) => ipcRenderer.send('menu:ignore', v),
 });

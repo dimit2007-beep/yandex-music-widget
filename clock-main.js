@@ -36,12 +36,17 @@ const log = (msg) => {
   } catch (_) {}
 };
 
-const DEFAULT_UI = { opacity: 25, locked: false };
+const DEFAULT_UI = { opacity: 25, locked: false, display: 'top' };
 const OPACITIES = [0, 5, 10, 25, 40, 60, 80, 100];
 
 let win = null;
 let tray = null;
 let quitting = false;
+// режим показа («только рабочий стол») — полностью независимо от виджета музыки
+let fgNow = 'window';   // что сейчас активно (от ForegroundWatcher)
+let fgRect = null;      // границы активного окна в DIP { x, y, w, h } | null
+let userHidden = false; // пользователь сам скрыл часы
+let menuOpen = false;   // открыто меню часов — в режиме «desktop» не прятать
 
 function loadUi() {
   try {
@@ -74,9 +79,49 @@ function saveBounds() {
 function applyUi(patch) {
   const ui = { ...loadUi(), ...patch };
   saveUi(ui);
+  if (patch && patch.display) userHidden = false; // сменили режим — показываем по нему
   if (tray) tray.setContextMenu(buildUiMenu());
   if (win && win.applyUi) win.applyUi(ui);
   if (win && !win.isDestroyed()) win.webContents.send('yp:ui', ui);
+  applyDisplayMode();
+}
+
+// «Только рабочий стол»: часы видны на рабочем столе, при открытом меню и
+// когда активное окно НЕ перекрывает их; иначе прячутся
+function applyDisplayMode() {
+  if (!win || win.isDestroyed()) return;
+  const mode = loadUi().display || 'top';
+  if (mode !== 'desktop') {
+    if (!userHidden && !win.isVisible()) win.showInactive();
+    return;
+  }
+  const b = win.getBounds();
+  const overlap = fgRect
+    ? fgRect.x < b.x + b.width && b.x < fgRect.x + fgRect.w &&
+      fgRect.y < b.y + b.height && b.y < fgRect.y + fgRect.h
+    : true; // данных об окне нет — считаем перекрытым (безопасно)
+  const wantVisible = !userHidden && (fgNow === 'desktop' || menuOpen || !overlap);
+  if (wantVisible && !win.isVisible()) {
+    log('[disp] show (fg=' + fgNow + ' overlap=' + overlap + ')');
+    win.showInactive();
+  } else if (!wantVisible && win.isVisible()) {
+    log('[disp] hide (fg=' + fgNow + ' overlap=' + overlap + ')');
+    win.hide();
+  }
+}
+
+// перезапуск часов: прямой detached-спавн нового экземпляра electron с --clock
+function restartClockNow() {
+  quitting = true;
+  const { spawn } = require('child_process');
+  const child = spawn(process.execPath, [__dirname, '--clock'], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.on('error', (e) => log('restart spawn error: ' + (e.stack || e.message)));
+  child.unref();
+  app.quit();
 }
 
 // меню прозрачности/фиксации — общее для трея и ПКМ
@@ -94,12 +139,19 @@ function buildUiMenu() {
       })),
     },
     {
+      label: 'Только рабочий стол',
+      type: 'checkbox',
+      checked: ui.display === 'desktop',
+      click: () => applyUi({ display: ui.display === 'desktop' ? 'top' : 'desktop' }),
+    },
+    {
       label: 'Зафиксировать положение',
       type: 'checkbox',
       checked: !!ui.locked,
       click: () => applyUi({ locked: !loadUi().locked }),
     },
     { type: 'separator' },
+    { label: 'Перезапустить часы', click: restartClockNow },
     { label: 'Закрыть часы', click: () => { quitting = true; app.quit(); } },
   ]);
 }
@@ -107,10 +159,16 @@ function buildUiMenu() {
 function toggleWin() {
   if (!win || win.isDestroyed()) {
     createWindow();
+    applyDisplayMode();
     return;
   }
-  if (win.isVisible()) win.hide();
-  else win.show();
+  if (win.isVisible()) {
+    userHidden = true; // сам скрыл — автопоказ режима не перебивает
+    win.hide();
+  } else {
+    userHidden = false;
+    win.show();
+  }
 }
 
 // ---------------- окно ----------------
@@ -149,6 +207,15 @@ function createWindow() {
   win.on('resize', saveSoon);
   win.on('move', saveSoon);
   win.on('close', saveBounds);
+  // часы переехали — перекрытие с активным окном могло измениться (дебаунс:
+  // проверяем после окончания перетаскивания, чтобы не спрятать часы в руке)
+  let dispTimer = null;
+  const recheckDisplay = () => {
+    clearTimeout(dispTimer);
+    dispTimer = setTimeout(applyDisplayMode, 250);
+  };
+  win.on('move', recheckDisplay);
+  win.on('resize', recheckDisplay);
   win.applyUi = (ui) => {
     if (win.isDestroyed()) return;
     win.setResizable(!ui.locked); // с ручным перетаскиванием movable не участвует
@@ -179,8 +246,10 @@ function buildClockMenuItems(ui) {
         checked: ui.opacity === v,
       })),
     },
+    { id: 'display-desktop', label: 'Только рабочий стол', checked: ui.display === 'desktop' },
     { id: 'lock', label: 'Зафиксировать положение', checked: !!ui.locked },
     { type: 'sep' },
+    { id: 'restart', label: 'Перезапустить часы' },
     { id: 'close', label: 'Закрыть часы' },
   ];
 }
@@ -188,6 +257,7 @@ function buildClockMenuItems(ui) {
 // ПКМ по часам — popup-меню у курсора (закрывается любым кликом снаружи)
 ipcMain.handle('ymc:ctxmenu', (_e, pt) => {
   if (!win || win.isDestroyed()) return;
+  menuOpen = true; // пока меню открыто, в режиме «desktop» не прятать
   openMenuPopup({
     x: pt && pt.x,
     y: pt && pt.y,
@@ -195,6 +265,10 @@ ipcMain.handle('ymc:ctxmenu', (_e, pt) => {
     onPick: (id) => {
       if (id === 'toggle') return toggleWin();
       if (id === 'lock') return applyUi({ locked: !loadUi().locked });
+      if (id === 'display-desktop') {
+        return applyUi({ display: loadUi().display === 'desktop' ? 'top' : 'desktop' });
+      }
+      if (id === 'restart') return restartClockNow();
       if (id === 'close') {
         quitting = true;
         app.quit();
@@ -202,6 +276,12 @@ ipcMain.handle('ymc:ctxmenu', (_e, pt) => {
       }
       const m = /^opacity-(\d+)$/.exec(id);
       if (m) return applyUi({ opacity: Number(m[1]) });
+    },
+    onClose: () => {
+      menuOpen = false;
+      // FG-смотритель узнаёт о возврате фокуса рабочему столу до 400 мс —
+      // перепроверяем видимость чуть позже, чтобы не мигнуть зря
+      setTimeout(applyDisplayMode, 450);
     },
   });
 });
@@ -230,16 +310,20 @@ nativeTheme.themeSource = 'dark';
 
 app.whenReady().then(() => {
   createWindow();
+  applyDisplayMode(); // при «только рабочий стол» стартуем скрытым, если окно перекрывает
   // трей часов (та же иконка)
   tray = new Tray(path.join(__dirname, 'icon.ico'));
   tray.setToolTip('Часы · виджет');
   tray.setContextMenu(buildUiMenu());
   tray.on('click', toggleWin);
-  // рабочий стол vs другие окна — управление click-through
-  const fg = new ForegroundWatcher((mode) => {
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('yp:fgmode', mode === 'desktop' ? 'desktop' : 'window');
-    }
+  // рабочий стол vs другие окна — управление click-through и режимом показа
+  const fg = new ForegroundWatcher((info) => {
+    fgNow = info.mode === 'desktop' ? 'desktop' : 'window';
+    fgRect = info.mode === 'window' && [info.x, info.y, info.w, info.h].every(Number.isFinite)
+      ? { x: info.x, y: info.y, w: info.w, h: info.h }
+      : null;
+    if (win && !win.isDestroyed()) win.webContents.send('yp:fgmode', fgNow);
+    applyDisplayMode();
   });
   fg.start();
 });

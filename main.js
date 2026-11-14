@@ -415,6 +415,15 @@ function createWindow() {
   win.on('resize', saveBoundsSoon);
   win.on('move', saveBoundsSoon);
   win.on('close', saveBounds);
+  // виджет переехал/изменился — перекрытие с активным окном могло измениться.
+  // Дебаунс: в конце перетаскивания, чтобы не спрятать виджет прямо в руке.
+  let dispTimer = null;
+  const recheckDisplay = () => {
+    clearTimeout(dispTimer);
+    dispTimer = setTimeout(applyDisplayMode, 250);
+  };
+  win.on('move', recheckDisplay);
+  win.on('resize', recheckDisplay);
   win.applyUi = (ui) => {
     if (win.isDestroyed()) return;
     win.setMovable(!ui.locked);      // фиксируем перетаскивание окна
@@ -494,25 +503,37 @@ function popupOn(wnd, menu) {
   });
 }
 
-// «Режим показа»: 'top' — всегда поверх приложений; 'desktop' — виден только
-// когда активен рабочий стол (Progman/WorkerW), поверх программ прячется
+// «Режим показа»: 'top' — всегда поверх приложений; 'desktop' — виден на
+// рабочем столе и когда активное окно НЕ перекрывает виджет (поверх программ
+// прячется, только если окно наехало на плашку)
 let fgNow = 'window';   // что сейчас активно (от ForegroundWatcher)
+let fgRect = null;      // границы активного окна в DIP { x, y, w, h } | null
 let userHidden = false; // пользователь сам скрыл виджет («Показать/скрыть»)
 let menuOpen = false;   // открыто ПКМ-меню виджета — в режиме «desktop» не прятать
 
 function applyDisplayMode() {
   if (!win || win.isDestroyed()) return;
   const mode = loadUi().display || 'top';
-  const log = '[disp] mode=' + mode + ' userHidden=' + userHidden + ' fg=' + fgNow + ' menuOpen=' + menuOpen + ' vis=' + win.isVisible();
   if (mode !== 'desktop') {
     // поверх приложений: прятать может только сам пользователь
-    if (!userHidden && !win.isVisible()) { console.log(log + ' -> showInactive'); win.showInactive(); }
+    if (!userHidden && !win.isVisible()) { console.log('[disp] top -> showInactive'); win.showInactive(); }
     return;
   }
-  // только рабочий стол: виден на рабочем столе и пока открыто его меню
-  const wantVisible = !userHidden && (fgNow === 'desktop' || menuOpen);
-  if (wantVisible && !win.isVisible()) { console.log(log + ' -> showInactive'); win.showInactive(); }
-  else if (!wantVisible && win.isVisible()) { console.log(log + ' -> hide'); win.hide(); }
+  // только рабочий стол: виден на рабочем столе, при открытом меню и когда
+  // активное окно НЕ перекрывает плашку
+  const b = win.getBounds();
+  const overlap = fgRect
+    ? fgRect.x < b.x + b.width && b.x < fgRect.x + fgRect.w &&
+      fgRect.y < b.y + b.height && b.y < fgRect.y + fgRect.h
+    : true; // данных об окне нет — считаем перекрытым (старое поведение)
+  const wantVisible = !userHidden && (fgNow === 'desktop' || menuOpen || !overlap);
+  if (wantVisible && !win.isVisible()) {
+    console.log('[disp] desktop fg=' + fgNow + ' overlap=' + overlap + ' rect=' + JSON.stringify(fgRect) + ' -> showInactive');
+    win.showInactive();
+  } else if (!wantVisible && win.isVisible()) {
+    console.log('[disp] desktop fg=' + fgNow + ' overlap=' + overlap + ' rect=' + JSON.stringify(fgRect) + ' -> hide');
+    win.hide();
+  }
 }
 
 function applyUi(patch) {
@@ -730,9 +751,12 @@ app.whenReady().then(() => {
   if (!process.env.YM_NO_SVCS) {
     const smtc = new SmtcWatcher(onSmtcState);
     smtc.start();
-    // рабочий стол vs другие окна — управление click-through
-    const fg = new ForegroundWatcher((mode) => {
-      fgNow = mode === 'desktop' ? 'desktop' : 'window';
+    // рабочий стол vs другие окна — управление click-through и режимом показа
+    const fg = new ForegroundWatcher((info) => {
+      fgNow = info.mode === 'desktop' ? 'desktop' : 'window';
+      fgRect = info.mode === 'window' && [info.x, info.y, info.w, info.h].every(Number.isFinite)
+        ? { x: info.x, y: info.y, w: info.w, h: info.h }
+        : null;
       if (win && !win.isDestroyed()) win.webContents.send('yp:fgmode', fgNow);
       applyDisplayMode();
     });

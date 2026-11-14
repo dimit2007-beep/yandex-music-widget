@@ -29,10 +29,18 @@ ipcMain.handle('menu:close', (e) => {
 
 ipcMain.on('menu:log', (_e, msg) => console.log('[menu] ' + msg));
 
+// клик-сквозь прозрачных полей окна меню (управляет renderer по координатам мыши)
+ipcMain.on('menu:ignore', (e, v) => {
+  if (popup && !popup.isDestroyed() && e.sender === popup.webContents) {
+    popup.setIgnoreMouseEvents(!!v, { forward: true });
+  }
+});
+
 ipcMain.on('menu:ready', (e, size) => {
   if (!popup || e.sender !== popup.webContents || !cur) return;
-  // renderer сам считает размер и экранную позицию (в т.ч. подменю влево) —
-  // только применяем. Меню не прыгает: якорь — фактическое положение меню.
+  // renderer раскладывает меню и окно ОДИН раз (окно с запасом под подменю и
+  // БОЛЬШЕ НЕ ДВИГАЕТСЯ — прыжков при открытии подменю нет в принципе)
+  console.log('[menu] ready ' + Math.round(size.w) + 'x' + Math.round(size.h) + ' at ' + Math.round(size.x) + ',' + Math.round(size.y));
   popup.setBounds({
     x: Math.round(size.x),
     y: Math.round(size.y),
@@ -78,7 +86,7 @@ function openMenuPopup({ x, y, payload, onPick, onClose }) {
   const est = estimateSize(payload);
   // параметры popup'а — максимально близко к плашкам (они рисуют текст нормально)
   popup = new BrowserWindow({
-    show: true,
+    show: false, // показываем только после точной раскладки из menu:ready
     x: cur.x,
     y: cur.y,
     ...est,
@@ -94,6 +102,7 @@ function openMenuPopup({ x, y, payload, onPick, onClose }) {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      backgroundThrottling: false, // окно скрыто до ready — кадры не тормозить
     },
   });
 
@@ -117,7 +126,9 @@ function openMenuPopup({ x, y, payload, onPick, onClose }) {
   popup.loadFile(path.join(__dirname, 'menu-popup.html'));
   popup.webContents.on('did-finish-load', () => {
     if (popup && !popup.isDestroyed()) {
-      popup.webContents.send('menu:init', payload);
+      // anchor — куда должно встать меню (позиция курсора): renderer сам
+      // рассчитает окно с запасом под подменю и пришлёт готовый размер
+      popup.webContents.send('menu:init', { items: payload.items, anchor: { x: cur.x, y: cur.y } });
       // без этого строки меню дорисовываются только по мере инвалидации
       try { popup.webContents.invalidate(); } catch (_) {}
     }

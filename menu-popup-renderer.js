@@ -1,7 +1,15 @@
-/* Контекстное меню в popup-окне: строит пункты, меряет, шлёт выбранный id. */
+/* Контекстное меню в popup-окне: строит пункты, шлёт выбранный id.
+   Архитектура «неподвижного окна»: окно сразу раскладывается с запасом под
+   подменю слева и справа и БОЛЬШЕ не двигается и не меняет размер — прыжков
+   при открытии подменю нет в принципе. Подменю открывается чистым CSS вправо
+   или влево. Прозрачные поля окна пропускают клики (setIgnoreMouseEvents +
+   forward), наведение отслеживается по координатам мыши (elementFromPoint). */
 
 const menuEl = document.getElementById('menu');
 const SUB_GAP = 6; // зазор между меню и подменю
+
+let anchor = { x: 0, y: 0 }; // куда встаёт меню (экранные DIP, считает main)
+let layout = null; // { leftM, rightM, menuW, winH }
 
 function buildItems(items, into, isTop) {
   into.innerHTML = '';
@@ -30,14 +38,10 @@ function buildItems(items, into, isTop) {
       sub.className = 'msub';
       row.appendChild(sub);
       buildItems(it.items, sub, false);
-      row.addEventListener('mouseenter', () => {
-        openSub(row, sub);
-      });
+      row.addEventListener('mouseenter', () => openSub(row, sub));
     } else if (isTop) {
-      // наведение на обычный пункт верхнего уровня закрывает чужое подменю
-      row.addEventListener('mouseenter', () => {
-        if (closeAllSubs()) window.mnu.ready(size());
-      });
+      // наведение на обычный пункт закрывает чужое подменю
+      row.addEventListener('mouseenter', () => closeAllSubs());
       row.addEventListener('click', () => window.mnu.pick(it.id));
     } else {
       row.addEventListener('click', () => window.mnu.pick(it.id));
@@ -52,86 +56,114 @@ function closeAllSubs() {
     s.classList.remove('open');
     closed = true;
   });
-  if (closed) menuEl.style.marginLeft = '';
   return closed;
 }
 
-// Режим «подменю влево»: окно расширяем влево, меню якорим отступом на месте.
-// leftMode.x0 — экранная позиция меню, она не должна ехать ни при открытии,
-// ни при закрытии подменю (иначе меню «прыгает»)
-let leftMode = null; // { x0, off } | null
+// измерить все подменю (display:none → временно показать невидимо)
+function measureSubs() {
+  const subs = Array.from(menuEl.querySelectorAll('.msub'));
+  subs.forEach((s) => { s.style.display = 'block'; s.style.visibility = 'hidden'; });
+  const res = { maxSub: 0, maxDrop: 0 };
+  for (const s of subs) {
+    const row = s.parentElement;
+    res.maxSub = Math.max(res.maxSub, s.offsetWidth);
+    res.maxDrop = Math.max(res.maxDrop, row.offsetTop + s.offsetHeight + 6);
+  }
+  subs.forEach((s) => { s.style.display = ''; s.style.visibility = ''; });
+  return res;
+}
 
-// открыть подменю у строки row: вправо, если есть место, иначе влево
+// ОДИН раз раскладываем окно: меню встаёт в anchor, окно получает запас под
+// подменю по обе стороны (сколько есть на экране). Дальше окно не трогаем.
+function layoutWindow() {
+  const { maxSub, maxDrop } = measureSubs();
+  const mw = menuEl.offsetWidth;
+  const mh = menuEl.offsetHeight;
+  const scr = window.screen;
+  const availL = scr.availLeft;
+  const availR = scr.availLeft + scr.availWidth;
+  const availB = scr.availTop + scr.availHeight;
+  // меню целиком в пределах экрана
+  const mx = Math.max(availL, Math.min(anchor.x, availR - mw));
+  const my = Math.max(scr.availTop, Math.min(anchor.y, availB - mh));
+  // запасы под подменю слева/справа — ровно столько, сколько позволяет экран
+  let leftM = Math.min(maxSub + SUB_GAP + 2, mx - availL);
+  let rightM = Math.min(maxSub + SUB_GAP + 2, availR - (mx + mw));
+  if (leftM < 0) leftM = 0;
+  if (rightM < 0) rightM = 0;
+  menuEl.style.position = 'absolute';
+  menuEl.style.left = leftM + 'px';
+  menuEl.style.top = '0px';
+  const winW = leftM + mw + rightM;
+  const winH = Math.min(Math.max(mh, maxDrop), availB - my);
+  layout = { leftM, rightM, menuW: mw, winH };
+  window.mnu.ready({ x: Math.round(mx - leftM), y: Math.round(my), w: winW, h: winH });
+}
+
+// открыть подменю у строки: вправо, если в окне есть запас, иначе влево.
+// #menu теперь position:absolute — подменю позиционируется ОТ МЕНЮ.
+// Мост 4px: подменю заходит на меню, иначе в щели мышь ловит уход с меню
+// и подменю схлопывается.
 function openSub(row, sub) {
-  // закрыть другие открытые подменю
   menuEl.querySelectorAll('.msub.open').forEach((x) => {
     if (x !== sub) x.classList.remove('open');
   });
   sub.classList.add('open');
-  const sw = sub.offsetWidth; // ширина подменю (уже display:block)
-  const mrect = menuEl.getBoundingClientRect();
-  const screenRight = window.screen.availLeft + window.screen.availWidth;
-  // якорь: при первом входе окно ещё не сдвинуто — это просто screenX;
-  // дальше берём сохранённый, т.к. окно уже уехало влево на прошлый off
-  const x0 = leftMode ? leftMode.x0 : window.screenX + mrect.left;
-  if (x0 + mrect.width + sw + SUB_GAP <= screenRight) {
-    // место справа есть — обычное открытие вправо
-    menuEl.style.marginLeft = '';
-    sub.style.left = mrect.width - 4 + 'px';
+  const sw = sub.offsetWidth;
+  if (layout && layout.rightM >= sw + 2) {
+    sub.style.left = layout.menuW - 4 + 'px'; // вправо
+  } else if (layout && layout.leftM >= sw + 2) {
+    sub.style.left = -(sw - 4) + 'px'; // влево
   } else {
-    // справа не влезает — открываем влево: окно расширяем влево на off,
-    // меню прижимаем отступом (на экране оно остаётся на месте),
-    // подменю кладём слева. ВАЖНО: заходим на 4px на меню (как у открытия
-    // вправо) — иначе между меню и подменю остаётся щель, мышь её
-    // пересекает, menuEl ловит mouseleave и подменю схлопывается
-    const off = sw + SUB_GAP;
-    menuEl.style.marginLeft = off + 'px';
-    sub.style.left = (SUB_GAP + 4) + 'px';
-    leftMode = { x0, off };
+    sub.style.left = '4px'; // совсем нет места — поверх меню
   }
-  sub.style.top = row.offsetTop - 6 + 'px';
-  window.mnu.ready(size());
+  let top = row.offsetTop - 6;
+  const sh = sub.offsetHeight;
+  if (layout && top + sh > layout.winH) top = Math.max(0, layout.winH - sh - 6);
+  sub.style.top = top + 'px';
 }
 
-// размер И положение окна: renderer сам считает экран (DIP), main только применяет
-function size() {
-  const margin = parseFloat(menuEl.style.marginLeft) || 0; // >0 — подменю открыто влево
-  let w = menuEl.offsetWidth + margin, h = menuEl.offsetHeight;
-  menuEl.querySelectorAll('.msub.open').forEach((s) => {
-    if (!margin) w = Math.max(w, s.offsetLeft + s.offsetWidth); // вправо: включаем подменю
-    h = Math.max(h, s.offsetTop + s.offsetHeight);
-  });
-  const scr = window.screen;
-  const mrect = menuEl.getBoundingClientRect();
-  let x, y;
-  if (margin > 0 && leftMode) {
-    // окно расширяем влево на off, меню якорим отступом — на экране не едет
-    x = leftMode.x0 - leftMode.off;
-  } else {
-    if (leftMode) {
-      // подменю закрылось/переключилось вправо — вернуть окно на место меню
-      x = leftMode.x0;
-      leftMode = null;
-    } else {
-      x = window.screenX + mrect.left;
-    }
+// ------- клик-сквозь прозрачных полей + закрытие подменю по уходу мыши -------
+
+function overMenu(x, y) {
+  const el = document.elementFromPoint(x, y);
+  if (!el) return false;
+  if (menuEl.contains(el)) return true;
+  for (const s of menuEl.querySelectorAll('.msub.open')) {
+    if (s.contains(el)) return true;
   }
-  y = window.screenY + mrect.top;
-  if (x + w > scr.availLeft + scr.availWidth) x = scr.availLeft + scr.availWidth - w;
-  if (x < scr.availLeft) x = scr.availLeft;
-  if (y + h > scr.availTop + scr.availHeight) y = scr.availTop + scr.availHeight - h;
-  if (y < scr.availTop) y = scr.availTop;
-  return { x: Math.round(x), y: Math.round(y), w, h };
+  return false;
 }
 
-// уход мыши за пределы меню — закрыть подменю и вернуть окно к размеру меню
-menuEl.addEventListener('mouseleave', () => {
-  if (closeAllSubs()) window.mnu.ready(size());
+let ignoring = false;
+function setIgnore(v) {
+  if (v !== ignoring) {
+    ignoring = v;
+    window.mnu.ignoreMouse(v);
+  }
+}
+
+window.addEventListener('mousemove', (e) => {
+  const over = overMenu(e.clientX, e.clientY);
+  setIgnore(!over);
+  if (!over) closeAllSubs(); // ушли с меню — подменю закрыть
+});
+
+window.addEventListener('mouseout', (e) => {
+  if (e.relatedTarget) return; // переход между элементами внутри — не уход
+  setIgnore(true);
+  closeAllSubs();
+});
+
+// страховка: реальный клик в прозрачном поле, пока пропуск ещё не включился
+window.addEventListener('mousedown', (e) => {
+  if (!overMenu(e.clientX, e.clientY)) window.mnu.close();
 });
 
 window.mnu.onInit((data) => {
+  anchor = (data && data.anchor) || { x: window.screenX, y: window.screenY };
   buildItems(data.items, menuEl, true);
-  window.mnu.ready(size());
+  layoutWindow();
 });
 
 window.addEventListener('keydown', (e) => {
