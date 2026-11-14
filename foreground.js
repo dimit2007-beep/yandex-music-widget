@@ -1,11 +1,14 @@
 /**
  * Смотритель активного окна: рабочий стол (Progman/WorkerW) или что-то другое.
  * Долгоживущий PowerShell-процесс печатает JSON-строку при смене режима ИЛИ
- * при смене границ активного окна (развёрнутое/перемещённое окно тоже меняет
- * «перекрывает ли оно виджет»):
+ * при смене границ активного окна:
  *   {"mode":"desktop"}
  *   {"mode":"window","x":..,"y":..,"w":..,"h":..}  — видимые границы в DIP
  * Границы берутся из DWM (без теней и невидимых рамок), делятся на DPI окна.
+ * Опрос быстрый (15 мс), чтобы «дырка» под активным окном в режиме
+ * «только рабочий стол» двигалась плавно, как штатное перекрытие окон.
+ * Чтобы не жечь CPU впустую: класс/DPI/свой-процесс выясняются только при
+ * смене активного окна (кэш по hwnd), в цикле — только границы.
  */
 const { spawn } = require('child_process');
 
@@ -25,31 +28,43 @@ public static class FG {
 }
 "@
 $own = __OWN_PID__
-$last = ''
+$r = New-Object FG+RECT
+$lastHwnd = [IntPtr]::Zero
+$lastMode = ''
 $lastRect = ''
+$lastPrinted = ''
+$sf = 1.0
 while ($true) {
   $h = [FG]::GetForegroundWindow()
-  $fp = [uint32]0
-  [void][FG]::GetWindowThreadProcessId($h, [ref]$fp)
-  $sb = New-Object System.Text.StringBuilder 256
-  [FG]::GetClassName($h, $sb, 256) | Out-Null
-  $cls = $sb.ToString()
-  # панель задач и хосты оболочки считаем частью рабочего стола
-  $mode = if ($cls -eq 'Progman' -or $cls -eq 'WorkerW' -or $cls -eq 'SHELLDLL_DefView' -or
-              $cls -eq 'Shell_TrayWnd' -or $cls -eq 'Shell_SecondaryTrayWnd' -or
-              $cls.StartsWith('XamlExplorerHostIslandWindow')) { 'desktop' } else { 'window' }
-  # своё окно (popup-меню, окно входа) в фокусе — считаем рабочим столом,
-  # иначе виджет вырежет «дырку» под собственное меню
-  if ($own -gt 0 -and $fp -eq $own) { $mode = 'desktop' }
+  if ($h -ne $lastHwnd) {
+    # новое активное окно: класс, свой/чужой процесс, DPI
+    $fp = [uint32]0
+    [void][FG]::GetWindowThreadProcessId($h, [ref]$fp)
+    $sb = New-Object System.Text.StringBuilder 256
+    [void][FG]::GetClassName($h, $sb, 256)
+    $cls = $sb.ToString()
+    # панель задач и хосты оболочки считаем частью рабочего стола
+    $mode = if ($cls -eq 'Progman' -or $cls -eq 'WorkerW' -or $cls -eq 'SHELLDLL_DefView' -or
+                $cls -eq 'Shell_TrayWnd' -or $cls -eq 'Shell_SecondaryTrayWnd' -or
+                $cls.StartsWith('XamlExplorerHostIslandWindow')) { 'desktop' } else { 'window' }
+    # своё окно (popup-меню, окно входа) в фокусе — считаем рабочим столом,
+    # иначе виджет вырежет «дырку» под собственное меню
+    if ($own -gt 0 -and $fp -eq $own) { $mode = 'desktop' }
+    if ($mode -eq 'window') {
+      $dpi = 0
+      try { $dpi = [FG]::GetDpiForWindow($h) } catch { $dpi = 0 }
+      if ($dpi -le 0) { $dpi = 96 }
+      $sf = $dpi / 96.0
+    }
+    $lastHwnd = $h
+    $lastMode = $mode
+  } else {
+    $mode = $lastMode
+  }
   $rectStr = ''
   if ($mode -eq 'window') {
-    $r = New-Object FG+RECT
     # видимые границы окна (без теней/невидимых рамок); при ошибке — обычный rect
-    if ([FG]::DwmGetWindowAttribute($h, 9, [ref]$r, 16) -ne 0) { [FG]::GetWindowRect($h, [ref]$r) | Out-Null }
-    $dpi = 0
-    try { $dpi = [FG]::GetDpiForWindow($h) } catch { $dpi = 0 }
-    if ($dpi -le 0) { $dpi = 96 }
-    $sf = $dpi / 96.0
+    if ([FG]::DwmGetWindowAttribute($h, 9, [ref]$r, 16) -ne 0) { [void][FG]::GetWindowRect($h, [ref]$r) }
     $x = [int]([Math]::Round($r.L / $sf))
     $y = [int]([Math]::Round($r.T / $sf))
     $w = [int]([Math]::Round(($r.R - $r.L) / $sf))
@@ -57,8 +72,8 @@ while ($true) {
     $rectStr = "$x,$y,$w,$hh"
   }
   # печатаем при смене режима или смене границ активного окна
-  if ($mode -ne $last -or ($mode -eq 'window' -and $rectStr -ne $lastRect)) {
-    $last = $mode
+  if ($mode -ne $lastPrinted -or ($mode -eq 'window' -and $rectStr -ne $lastRect)) {
+    $lastPrinted = $mode
     $lastRect = $rectStr
     if ($mode -eq 'window') {
       $p = $rectStr.Split(',')
@@ -68,7 +83,7 @@ while ($true) {
     }
     [Console]::Out.Flush()
   }
-  Start-Sleep -Milliseconds 400
+  Start-Sleep -Milliseconds 15
 }
 `;
 

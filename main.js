@@ -85,6 +85,10 @@ function saveUi(ui) {
   fs.writeFileSync(uiFile, JSON.stringify(ui, null, 2));
 }
 
+// кэш режима показа: loadUi() читает файл с диска, поэтому на каждый
+// mousemove/move его дёргать нельзя
+let displayMode = loadUi().display || 'top';
+
 let oauthResolve = null; // promise токена для окна-инпута
 
 function loadToken() {
@@ -416,15 +420,11 @@ function createWindow() {
   win.on('resize', saveBoundsSoon);
   win.on('move', saveBoundsSoon);
   win.on('close', saveBounds);
-  // виджет переехал/изменился — перекрытие с активным окном могло измениться.
-  // Дебаунс: в конце перетаскивания, чтобы не спрятать виджет прямо в руке.
-  let dispTimer = null;
-  const recheckDisplay = () => {
-    clearTimeout(dispTimer);
-    dispTimer = setTimeout(applyDisplayMode, 250);
-  };
-  win.on('move', recheckDisplay);
-  win.on('resize', recheckDisplay);
+  // виджет переехал/изменился — «дырка» под активным окном должна двигаться
+  // вместе с плашкой плавно (как штатное перекрытие окон), поэтому пересчёт
+  // на каждом событии, без дебаунса
+  win.on('move', applyDisplayMode);
+  win.on('resize', applyDisplayMode);
   win.applyUi = (ui) => {
     if (win.isDestroyed()) return;
     win.setMovable(!ui.locked);      // фиксируем перетаскивание окна
@@ -521,7 +521,7 @@ function sendFgHole(payload) {
 
 function applyDisplayMode() {
   if (!win || win.isDestroyed()) return;
-  const mode = loadUi().display || 'top';
+  const mode = displayMode;
   if (mode !== 'desktop' || userHidden) {
     // поверх приложений: прятать может только сам пользователь
     sendFgHole(null);
@@ -565,6 +565,7 @@ function applyUi(patch) {
   console.log('[applyUi] patch=' + JSON.stringify(patch));
   const ui = { ...loadUi(), ...patch };
   saveUi(ui);
+  displayMode = ui.display || 'top';
   if (patch && patch.display) userHidden = false; // сменили режим — показываем по нему
   if (tray) tray.setContextMenu(buildTrayMenu());
   if (win && win.applyUi) win.applyUi(ui);

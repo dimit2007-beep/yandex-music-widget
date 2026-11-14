@@ -62,6 +62,9 @@ function saveUi(ui) {
   fs.writeFileSync(uiFile, JSON.stringify(ui, null, 2));
 }
 
+// кэш режима показа: loadUi() читает файл с диска, на каждый move не дёргаем
+let displayMode = loadUi().display || 'top';
+
 function loadBounds() {
   try {
     return JSON.parse(fs.readFileSync(boundsFile, 'utf8'));
@@ -80,6 +83,7 @@ function saveBounds() {
 function applyUi(patch) {
   const ui = { ...loadUi(), ...patch };
   saveUi(ui);
+  displayMode = ui.display || 'top';
   if (patch && patch.display) userHidden = false; // сменили режим — показываем по нему
   if (tray) tray.setContextMenu(buildUiMenu());
   if (win && win.applyUi) win.applyUi(ui);
@@ -98,7 +102,7 @@ function sendFgHole(payload) {
 
 function applyDisplayMode() {
   if (!win || win.isDestroyed()) return;
-  const mode = loadUi().display || 'top';
+  const mode = displayMode;
   if (mode !== 'desktop' || userHidden) {
     sendFgHole(null);
     if (userHidden) {
@@ -231,15 +235,10 @@ function createWindow() {
   win.on('resize', saveSoon);
   win.on('move', saveSoon);
   win.on('close', saveBounds);
-  // часы переехали — перекрытие с активным окном могло измениться (дебаунс:
-  // проверяем после окончания перетаскивания, чтобы не спрятать часы в руке)
-  let dispTimer = null;
-  const recheckDisplay = () => {
-    clearTimeout(dispTimer);
-    dispTimer = setTimeout(applyDisplayMode, 250);
-  };
-  win.on('move', recheckDisplay);
-  win.on('resize', recheckDisplay);
+  // часы переехали — «дырка» под окном двигается вместе с ними плавно,
+  // поэтому пересчёт на каждом событии, без дебаунса
+  win.on('move', applyDisplayMode);
+  win.on('resize', applyDisplayMode);
   win.applyUi = (ui) => {
     if (win.isDestroyed()) return;
     win.setResizable(!ui.locked); // с ручным перетаскиванием movable не участвует
