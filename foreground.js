@@ -20,13 +20,17 @@ public static class FG {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
   [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hwnd, int attr, out RECT pvAttribute, int cbAttribute);
   [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
   public struct RECT { public int L, T, R, B; }
 }
 "@
+$own = __OWN_PID__
 $last = ''
 $lastRect = ''
 while ($true) {
   $h = [FG]::GetForegroundWindow()
+  $fp = [uint32]0
+  [void][FG]::GetWindowThreadProcessId($h, [ref]$fp)
   $sb = New-Object System.Text.StringBuilder 256
   [FG]::GetClassName($h, $sb, 256) | Out-Null
   $cls = $sb.ToString()
@@ -34,6 +38,9 @@ while ($true) {
   $mode = if ($cls -eq 'Progman' -or $cls -eq 'WorkerW' -or $cls -eq 'SHELLDLL_DefView' -or
               $cls -eq 'Shell_TrayWnd' -or $cls -eq 'Shell_SecondaryTrayWnd' -or
               $cls.StartsWith('XamlExplorerHostIslandWindow')) { 'desktop' } else { 'window' }
+  # своё окно (popup-меню, окно входа) в фокусе — считаем рабочим столом,
+  # иначе виджет вырежет «дырку» под собственное меню
+  if ($own -gt 0 -and $fp -eq $own) { $mode = 'desktop' }
   $rectStr = ''
   if ($mode -eq 'window') {
     $r = New-Object FG+RECT
@@ -66,8 +73,9 @@ while ($true) {
 `;
 
 class ForegroundWatcher {
-  constructor(onMode) {
+  constructor(onMode, ownPid) {
     this.onMode = onMode; // вызывается с {mode, x?, y?, w?, h?}
+    this.ownPid = ownPid || 0; // окна этого процесса считаем «рабочим столом»
     this.child = null;
     this.buf = '';
     this.stopped = false;
@@ -76,7 +84,8 @@ class ForegroundWatcher {
 
   start() {
     if (this.stopped) return;
-    const enc = Buffer.from(PS_SCRIPT, 'utf16le').toString('base64');
+    const ps = PS_SCRIPT.replace('__OWN_PID__', String(this.ownPid || 0));
+    const enc = Buffer.from(ps, 'utf16le').toString('base64');
     this.child = spawn(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-EncodedCommand', enc],

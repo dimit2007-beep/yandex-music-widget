@@ -83,17 +83,24 @@ window.ymc.onFgMode((mode) => {
   updateIgnore();
 });
 
-function updateIgnore(hover) {
+// «дырка» под активное окно: прозрачная часть плашки, сквозь неё видно окно
+window.ymc.onFgHole((d) => {
+  $('plate').style.clipPath = (d && d.clip) || '';
+});
+
+function updateIgnore() {
   // во время перетаскивания не включаем клик-сквозь — иначе жест рвётся
   if (drag) return;
-  // рабочий стол = часы интерактивны; при активном окне — интерактивны
-  // под курсором (иначе ПКМ-меню и перетаскивание недоступны)
-  const should = fgMode === 'desktop' ? false : !hover;
+  // как у плашки музыки: рабочий стол = часы интерактивны (таскать, ПКМ),
+  // активно приложение = клики проходят сквозь
+  const should = fgMode !== 'desktop';
   if (should !== ignoreMouse) {
     ignoreMouse = should;
     window.ymc.ignoreMouse(should);
   }
 }
 
-window.addEventListener('mousemove', () => updateIgnore(true)); // курсор над часами — интерактивны
-window.addEventListener('mouseout', () => updateIgnore(false));
+window.addEventListener('mouseout', (e) => {
+  if (e.relatedTarget) return; // переход между элементами внутри — не уход
+  updateIgnore();
+});

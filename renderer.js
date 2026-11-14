@@ -122,30 +122,45 @@ window.ym.authState().then((a) => {
   els.player.hidden = !authorized;
 });
 
-// ------- клик-сквозь: рабочий стол = интерактив, другие окна = сквозь (кроме кнопок) -------
+// ------- клик-сквозь: рабочий стол = интерактив, приложения = сквозь (кроме кнопок) -------
 
 let fgMode = 'window';
+let fgHole = null;      // «дырка» под активное окно (локальные координаты) | null
+let lastMouse = { x: -1, y: -1 };
 let ignoreMouse = null; // текущее посланное состояние
 
 window.ym.onFgMode((mode) => {
   fgMode = mode;
-  updateIgnore();
+  updateIgnore(hoveredInteractive(lastMouse.x, lastMouse.y));
   document.body.dataset.fgmode = mode;
 });
 
+window.ym.onFgHole((d) => {
+  fgHole = d && d.hole ? d.hole : null;
+  // прозрачная «дырка» в плашке: сквозь неё видно окно, наехавшее на виджет
+  document.getElementById('widget').style.clipPath = (d && d.clip) || '';
+  updateIgnore(hoveredInteractive(lastMouse.x, lastMouse.y));
+});
+
+function inHole(x, y) {
+  return !!fgHole &&
+    x >= fgHole.x && x < fgHole.x + fgHole.w &&
+    y >= fgHole.y && y < fgHole.y + fgHole.h;
+}
+
 function hoveredInteractive(x, y) {
-  const el = document.elementFromPoint(x, y);
-  if (!el) return false;
   if (!fgMode) return false;
-  // курсор над любой частью виджета — виджет целиком интерактивен.
-  // Раньше интерактивны были только кнопки, и тогда ПКМ-меню было
-  // недоступно при активном другом окне (клик уходил сквозь виджет)
-  return true;
+  if (inHole(x, y)) return false; // в дырке виджет «прозрачен» — клики уходят вниз
+  if (fgMode === 'desktop') return true;
+  // активно приложение: интерактивны только кнопки (и кнопка входа),
+  // остальная плашка пропускает клики окну под виджетом
+  const el = document.elementFromPoint(x, y);
+  return !!el && !!el.closest('button, #btn-login');
 }
 
 function updateIgnore(hover) {
   if (drag) return; // не переключать во время собственного перетаскивания
-  // desktop: интерактивно всё; window: сквозь всё, когда курсор не над виджетом
+  // desktop: интерактивно всё; window: сквозь всё, кроме кнопок под курсором
   const should = fgMode === 'desktop' ? false : !hover;
   if (should !== ignoreMouse) {
     ignoreMouse = should;
@@ -154,9 +169,14 @@ function updateIgnore(hover) {
 }
 
 window.addEventListener('mousemove', (e) => {
+  lastMouse = { x: e.clientX, y: e.clientY };
   updateIgnore(hoveredInteractive(e.clientX, e.clientY));
 });
-window.addEventListener('mouseout', () => updateIgnore(false));
+window.addEventListener('mouseout', (e) => {
+  if (e.relatedTarget) return; // переход между элементами внутри — не уход
+  lastMouse = { x: -1, y: -1 };
+  updateIgnore(false);
+});
 
 // ------- вид: прозрачность фона и показ кнопок (управляется из трея) -------
 

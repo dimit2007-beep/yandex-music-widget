@@ -18,6 +18,7 @@ const path = require('path');
 const fs = require('fs');
 const { ForegroundWatcher } = require('./foreground');
 const { openMenuPopup } = require('./menu-popup');
+const { computeHole, buildClip } = require('./fg-clip');
 
 // диагностика падений дочерних процессов Chromium (renderer/gpu)
 app.on('child-process-gone', (_e, details) => {
@@ -86,28 +87,51 @@ function applyUi(patch) {
   applyDisplayMode();
 }
 
-// «Только рабочий стол»: часы видны на рабочем столе, при открытом меню и
-// когда активное окно НЕ перекрывает их; иначе прячутся
+// «Только рабочий стол»: часы видны на рабочем столе; наехавшее окно прячет
+// только перекрытую часть (прозрачная «дырка»), целиком накрыло — прячем целиком
+let lastHole = null; // последний payload «дырки» { hole, clip } | null
+
+function sendFgHole(payload) {
+  lastHole = payload || null;
+  if (win && !win.isDestroyed()) win.webContents.send('yp:fghole', payload || null);
+}
+
 function applyDisplayMode() {
   if (!win || win.isDestroyed()) return;
   const mode = loadUi().display || 'top';
-  if (mode !== 'desktop') {
-    if (!userHidden && !win.isVisible()) win.showInactive();
+  if (mode !== 'desktop' || userHidden) {
+    sendFgHole(null);
+    if (userHidden) {
+      if (win.isVisible()) win.hide();
+      return;
+    }
+    if (!win.isVisible()) win.showInactive();
     return;
   }
-  const b = win.getBounds();
-  const overlap = fgRect
-    ? fgRect.x < b.x + b.width && b.x < fgRect.x + fgRect.w &&
-      fgRect.y < b.y + b.height && b.y < fgRect.y + fgRect.h
-    : true; // данных об окне нет — считаем перекрытым (безопасно)
-  const wantVisible = !userHidden && (fgNow === 'desktop' || menuOpen || !overlap);
-  if (wantVisible && !win.isVisible()) {
-    log('[disp] show (fg=' + fgNow + ' overlap=' + overlap + ')');
-    win.showInactive();
-  } else if (!wantVisible && win.isVisible()) {
-    log('[disp] hide (fg=' + fgNow + ' overlap=' + overlap + ')');
-    win.hide();
+  // на рабочем столе, при открытом меню или без данных об окне — целиком видны
+  if (menuOpen || fgNow === 'desktop' || !fgRect) {
+    if (!win.isVisible()) { log('[disp] show (desktop/menu)'); win.showInactive(); }
+    sendFgHole(null);
+    return;
   }
+  // активно чужое окно: вырезаем дырку под перекрытую часть
+  const b = win.getBounds();
+  const hole = computeHole(b, fgRect);
+  if (!hole) {
+    if (!win.isVisible()) { log('[disp] show (no overlap)'); win.showInactive(); }
+    sendFgHole(null);
+    return;
+  }
+  const { covered, clip } = buildClip(b.width, b.height, hole);
+  if (covered) {
+    log('[disp] hide (covered by window)');
+    sendFgHole(null);
+    if (win.isVisible()) win.hide();
+    return;
+  }
+  if (!win.isVisible()) { log('[disp] show (partial overlap)'); win.showInactive(); }
+  log('[disp] hole ' + JSON.stringify(hole));
+  sendFgHole({ hole, clip });
 }
 
 // перезапуск часов: прямой detached-спавн нового экземпляра electron с --clock
@@ -222,7 +246,12 @@ function createWindow() {
   };
   win.applyUi(loadUi());
   win.webContents.on('did-finish-load', () => {
-    if (win && !win.isDestroyed()) win.webContents.send('yp:ui', loadUi());
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('yp:ui', loadUi());
+      // актуальные режим стол/окна и «дырка» (события могли прийти до загрузки)
+      win.webContents.send('yp:fgmode', fgNow);
+      sendFgHole(lastHole);
+    }
   });
 }
 
@@ -316,7 +345,8 @@ app.whenReady().then(() => {
   tray.setToolTip('Часы · виджет');
   tray.setContextMenu(buildUiMenu());
   tray.on('click', toggleWin);
-  // рабочий стол vs другие окна — управление click-through и режимом показа
+  // рабочий стол vs другие окна — управление click-through и «дыркой»
+  // (окна самих часов — popup-меню — считаем рабочим столом)
   const fg = new ForegroundWatcher((info) => {
     fgNow = info.mode === 'desktop' ? 'desktop' : 'window';
     fgRect = info.mode === 'window' && [info.x, info.y, info.w, info.h].every(Number.isFinite)
@@ -324,7 +354,7 @@ app.whenReady().then(() => {
       : null;
     if (win && !win.isDestroyed()) win.webContents.send('yp:fgmode', fgNow);
     applyDisplayMode();
-  });
+  }, process.pid);
   fg.start();
 });
 

@@ -28,6 +28,7 @@ const { SmtcWatcher, sendMediaKey } = require('./smtc');
 const { CdpWatcher, buildRestartPs } = require('./cdp');
 const { ForegroundWatcher } = require('./foreground');
 const { openMenuPopup } = require('./menu-popup');
+const { computeHole, buildClip } = require('./fg-clip');
 
 // диагностика падений дочерних процессов Chromium (renderer/gpu)
 app.on('child-process-gone', (_e, details) => {
@@ -432,9 +433,10 @@ function createWindow() {
   win.applyUi(loadUi()); // применить сохранённую фиксацию сразу
   win.webContents.on('did-finish-load', () => {
     pushToRenderer('yp:ui', loadUi()); // применить сохранённый вид
-    // и актуальный режим стол/окна: событие от FG-смотрителя могло прийти
-    // раньше, чем страница загрузилась и подписалась — тогда оно терялось
+    // и актуальный режим стол/окна и «дырку»: события от FG-смотрителя могли
+    // прийти раньше, чем страница загрузилась и подписалась — тогда они терялись
     pushToRenderer('yp:fgmode', fgNow);
+    sendFgHole(lastHole);
   });
   // ПКМ по виджету — popup-меню у курсора (renderer шлёт координаты)
   // (сам renderer вызывает 'ym:openMenu'; см. IPC-секцию)
@@ -504,36 +506,59 @@ function popupOn(wnd, menu) {
 }
 
 // «Режим показа»: 'top' — всегда поверх приложений; 'desktop' — виден на
-// рабочем столе и когда активное окно НЕ перекрывает виджет (поверх программ
-// прячется, только если окно наехало на плашку)
+// рабочем столе, а наехавшее окно прячет только ту часть плашки, которую
+// реально перекрывает (прозрачная «дырка», сквозь неё видно окно)
 let fgNow = 'window';   // что сейчас активно (от ForegroundWatcher)
 let fgRect = null;      // границы активного окна в DIP { x, y, w, h } | null
 let userHidden = false; // пользователь сам скрыл виджет («Показать/скрыть»)
-let menuOpen = false;   // открыто ПКМ-меню виджета — в режиме «desktop» не прятать
+let menuOpen = false;   // открыто ПКМ-меню виджета — плашка целиком видима
+let lastHole = null;    // последний payload «дырки» { hole, clip } | null
+
+function sendFgHole(payload) {
+  lastHole = payload || null;
+  if (win && !win.isDestroyed()) win.webContents.send('yp:fghole', payload || null);
+}
 
 function applyDisplayMode() {
   if (!win || win.isDestroyed()) return;
   const mode = loadUi().display || 'top';
-  if (mode !== 'desktop') {
+  if (mode !== 'desktop' || userHidden) {
     // поверх приложений: прятать может только сам пользователь
-    if (!userHidden && !win.isVisible()) { console.log('[disp] top -> showInactive'); win.showInactive(); }
+    sendFgHole(null);
+    if (userHidden) {
+      if (win.isVisible()) win.hide();
+      return;
+    }
+    if (!win.isVisible()) { console.log('[disp] top -> showInactive'); win.showInactive(); }
     return;
   }
-  // только рабочий стол: виден на рабочем столе, при открытом меню и когда
-  // активное окно НЕ перекрывает плашку
-  const b = win.getBounds();
-  const overlap = fgRect
-    ? fgRect.x < b.x + b.width && b.x < fgRect.x + fgRect.w &&
-      fgRect.y < b.y + b.height && b.y < fgRect.y + fgRect.h
-    : true; // данных об окне нет — считаем перекрытым (старое поведение)
-  const wantVisible = !userHidden && (fgNow === 'desktop' || menuOpen || !overlap);
-  if (wantVisible && !win.isVisible()) {
-    console.log('[disp] desktop fg=' + fgNow + ' overlap=' + overlap + ' rect=' + JSON.stringify(fgRect) + ' -> showInactive');
-    win.showInactive();
-  } else if (!wantVisible && win.isVisible()) {
-    console.log('[disp] desktop fg=' + fgNow + ' overlap=' + overlap + ' rect=' + JSON.stringify(fgRect) + ' -> hide');
-    win.hide();
+  // только рабочий стол: на столе, при открытом меню или без данных об окне —
+  // плашка видна целиком
+  if (menuOpen || fgNow === 'desktop' || !fgRect) {
+    if (!win.isVisible()) { console.log('[disp] desktop -> showInactive'); win.showInactive(); }
+    sendFgHole(null);
+    return;
   }
+  // активно чужое окно: вырезаем дырку под перекрытую часть плашки
+  const b = win.getBounds();
+  const hole = computeHole(b, fgRect);
+  if (!hole) {
+    // окно не наехало — плашку не прячет вовсе
+    if (!win.isVisible()) { console.log('[disp] desktop no-overlap -> showInactive'); win.showInactive(); }
+    sendFgHole(null);
+    return;
+  }
+  const { covered, clip } = buildClip(b.width, b.height, hole);
+  if (covered) {
+    // окно накрыло плашку целиком — прячем, как раньше
+    console.log('[disp] desktop covered by ' + JSON.stringify(fgRect) + ' -> hide');
+    sendFgHole(null);
+    if (win.isVisible()) win.hide();
+    return;
+  }
+  if (!win.isVisible()) { console.log('[disp] desktop partial -> showInactive'); win.showInactive(); }
+  console.log('[disp] desktop hole ' + JSON.stringify(hole));
+  sendFgHole({ hole, clip });
 }
 
 function applyUi(patch) {
@@ -751,7 +776,8 @@ app.whenReady().then(() => {
   if (!process.env.YM_NO_SVCS) {
     const smtc = new SmtcWatcher(onSmtcState);
     smtc.start();
-    // рабочий стол vs другие окна — управление click-through и режимом показа
+    // рабочий стол vs другие окна — управление click-through и «дыркой»
+    // (окна самого виджета — меню, окно входа — считаем рабочим столом)
     const fg = new ForegroundWatcher((info) => {
       fgNow = info.mode === 'desktop' ? 'desktop' : 'window';
       fgRect = info.mode === 'window' && [info.x, info.y, info.w, info.h].every(Number.isFinite)
@@ -759,7 +785,7 @@ app.whenReady().then(() => {
         : null;
       if (win && !win.isDestroyed()) win.webContents.send('yp:fgmode', fgNow);
       applyDisplayMode();
-    });
+    }, process.pid);
     fg.start();
   }
 });
