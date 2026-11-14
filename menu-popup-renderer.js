@@ -56,6 +56,11 @@ function closeAllSubs() {
   return closed;
 }
 
+// Режим «подменю влево»: окно расширяем влево, меню якорим отступом на месте.
+// leftMode.x0 — экранная позиция меню, она не должна ехать ни при открытии,
+// ни при закрытии подменю (иначе меню «прыгает»)
+let leftMode = null; // { x0, off } | null
+
 // открыть подменю у строки row: вправо, если есть место, иначе влево
 function openSub(row, sub) {
   // закрыть другие открытые подменю
@@ -66,17 +71,23 @@ function openSub(row, sub) {
   const sw = sub.offsetWidth; // ширина подменю (уже display:block)
   const mrect = menuEl.getBoundingClientRect();
   const screenRight = window.screen.availLeft + window.screen.availWidth;
-  const menuRight = window.screenX + mrect.right;
-  if (menuRight + sw + SUB_GAP <= screenRight) {
+  // якорь: при первом входе окно ещё не сдвинуто — это просто screenX;
+  // дальше берём сохранённый, т.к. окно уже уехало влево на прошлый off
+  const x0 = leftMode ? leftMode.x0 : window.screenX + mrect.left;
+  if (x0 + mrect.width + sw + SUB_GAP <= screenRight) {
     // место справа есть — обычное открытие вправо
     menuEl.style.marginLeft = '';
     sub.style.left = mrect.width - 4 + 'px';
   } else {
-    // справа не влезает — открываем влево: сдвигаем меню правее внутри окна,
-    // а подменю кладём в освободившуюся зону слева
+    // справа не влезает — открываем влево: окно расширяем влево на off,
+    // меню прижимаем отступом (на экране оно остаётся на месте),
+    // подменю кладём слева. ВАЖНО: заходим на 4px на меню (как у открытия
+    // вправо) — иначе между меню и подменю остаётся щель, мышь её
+    // пересекает, menuEl ловит mouseleave и подменю схлопывается
     const off = sw + SUB_GAP;
     menuEl.style.marginLeft = off + 'px';
-    sub.style.left = -off + 'px';
+    sub.style.left = (SUB_GAP + 4) + 'px';
+    leftMode = { x0, off };
   }
   sub.style.top = row.offsetTop - 6 + 'px';
   window.mnu.ready(size());
@@ -84,20 +95,28 @@ function openSub(row, sub) {
 
 // размер И положение окна: renderer сам считает экран (DIP), main только применяет
 function size() {
-  let w = menuEl.offsetWidth, h = menuEl.offsetHeight;
+  const margin = parseFloat(menuEl.style.marginLeft) || 0; // >0 — подменю открыто влево
+  let w = menuEl.offsetWidth + margin, h = menuEl.offsetHeight;
   menuEl.querySelectorAll('.msub.open').forEach((s) => {
-    if (s.offsetLeft < 0) {
-      // открыто влево: окно должно включить зону слева от меню
-      w = Math.max(w, menuEl.offsetWidth - s.offsetLeft);
-    } else {
-      w = Math.max(w, s.offsetLeft + s.offsetWidth);
-    }
+    if (!margin) w = Math.max(w, s.offsetLeft + s.offsetWidth); // вправо: включаем подменю
     h = Math.max(h, s.offsetTop + s.offsetHeight);
   });
   const scr = window.screen;
   const mrect = menuEl.getBoundingClientRect();
-  let x = window.screenX + mrect.left;
-  let y = window.screenY + mrect.top;
+  let x, y;
+  if (margin > 0 && leftMode) {
+    // окно расширяем влево на off, меню якорим отступом — на экране не едет
+    x = leftMode.x0 - leftMode.off;
+  } else {
+    if (leftMode) {
+      // подменю закрылось/переключилось вправо — вернуть окно на место меню
+      x = leftMode.x0;
+      leftMode = null;
+    } else {
+      x = window.screenX + mrect.left;
+    }
+  }
+  y = window.screenY + mrect.top;
   if (x + w > scr.availLeft + scr.availWidth) x = scr.availLeft + scr.availWidth - w;
   if (x < scr.availLeft) x = scr.availLeft;
   if (y + h > scr.availTop + scr.availHeight) y = scr.availTop + scr.availHeight - h;

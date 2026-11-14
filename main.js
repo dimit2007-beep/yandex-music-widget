@@ -69,7 +69,7 @@ const boundsFile = path.join(userDir, 'window.json');
 const uiFile = path.join(userDir, 'ui.json');
 
 // настройки вида: buttons — показывать кнопки плеера, opacity — прозрачность фона плашки (%)
-const DEFAULT_UI = { buttons: true, opacity: 25, locked: false };
+const DEFAULT_UI = { buttons: true, opacity: 25, locked: false, display: 'top' };
 
 function loadUi() {
   try {
@@ -423,6 +423,9 @@ function createWindow() {
   win.applyUi(loadUi()); // применить сохранённую фиксацию сразу
   win.webContents.on('did-finish-load', () => {
     pushToRenderer('yp:ui', loadUi()); // применить сохранённый вид
+    // и актуальный режим стол/окна: событие от FG-смотрителя могло прийти
+    // раньше, чем страница загрузилась и подписалась — тогда оно терялось
+    pushToRenderer('yp:fgmode', fgNow);
   });
   // ПКМ по виджету — popup-меню у курсора (renderer шлёт координаты)
   // (сам renderer вызывает 'ym:openMenu'; см. IPC-секцию)
@@ -443,6 +446,11 @@ function buildMusicMenuItems(ui, authorized) {
         label: v >= 100 ? 'Непрозрачный (100%)' : v === 0 ? 'Полностью прозрачный (0%)' : `Дымка ${v}%`,
         checked: ui.opacity === v,
       })),
+    },
+    {
+      id: 'display-desktop',
+      label: 'Только рабочий стол',
+      checked: ui.display === 'desktop',
     },
     { id: 'lock', label: 'Зафиксировать положение', checked: !!ui.locked },
     { type: 'sep' },
@@ -470,6 +478,10 @@ function onMusicMenuPick(id) {
   }
   const m = /^opacity-(\d+)$/.exec(id);
   if (m) return applyUi({ opacity: Number(m[1]) });
+  // «Только рабочий стол» — переключатель: галочка стоит = показываем и поверх окон
+  if (id === 'display-desktop') {
+    return applyUi({ display: loadUi().display === 'desktop' ? 'top' : 'desktop' });
+  }
 }
 
 // меню поверх нефокусируемого окна: на время открытия делаем окно фокусируемым,
@@ -482,12 +494,36 @@ function popupOn(wnd, menu) {
   });
 }
 
+// «Режим показа»: 'top' — всегда поверх приложений; 'desktop' — виден только
+// когда активен рабочий стол (Progman/WorkerW), поверх программ прячется
+let fgNow = 'window';   // что сейчас активно (от ForegroundWatcher)
+let userHidden = false; // пользователь сам скрыл виджет («Показать/скрыть»)
+let menuOpen = false;   // открыто ПКМ-меню виджета — в режиме «desktop» не прятать
+
+function applyDisplayMode() {
+  if (!win || win.isDestroyed()) return;
+  const mode = loadUi().display || 'top';
+  const log = '[disp] mode=' + mode + ' userHidden=' + userHidden + ' fg=' + fgNow + ' menuOpen=' + menuOpen + ' vis=' + win.isVisible();
+  if (mode !== 'desktop') {
+    // поверх приложений: прятать может только сам пользователь
+    if (!userHidden && !win.isVisible()) { console.log(log + ' -> showInactive'); win.showInactive(); }
+    return;
+  }
+  // только рабочий стол: виден на рабочем столе и пока открыто его меню
+  const wantVisible = !userHidden && (fgNow === 'desktop' || menuOpen);
+  if (wantVisible && !win.isVisible()) { console.log(log + ' -> showInactive'); win.showInactive(); }
+  else if (!wantVisible && win.isVisible()) { console.log(log + ' -> hide'); win.hide(); }
+}
+
 function applyUi(patch) {
+  console.log('[applyUi] patch=' + JSON.stringify(patch));
   const ui = { ...loadUi(), ...patch };
   saveUi(ui);
+  if (patch && patch.display) userHidden = false; // сменили режим — показываем по нему
   if (tray) tray.setContextMenu(buildTrayMenu());
   if (win && win.applyUi) win.applyUi(ui);
   pushToRenderer('yp:ui', ui);
+  applyDisplayMode();
 }
 
 // перезапуск виджета: прямой detached-спавн нового экземпляра electron.
@@ -546,6 +582,12 @@ function buildTrayMenu() {
       })),
     },
     {
+      label: 'Только рабочий стол',
+      type: 'checkbox',
+      checked: ui.display === 'desktop',
+      click: () => applyUi({ display: ui.display === 'desktop' ? 'top' : 'desktop' }),
+    },
+    {
       label: 'Зафиксировать положение',
       type: 'checkbox',
       checked: !!ui.locked,
@@ -570,9 +612,12 @@ function createTray() {
 
 function toggleWin() {
   if (!win) return;
+  console.log('[toggle] isVisible=' + win.isVisible() + ' userHidden=' + userHidden + ' fg=' + fgNow);
   if (win.isVisible()) {
+    userHidden = true; // сам скрыл — автопоказ режима не перебивает
     win.hide();
   } else {
+    userHidden = false;
     win.show();
     win.focus();
   }
@@ -598,11 +643,18 @@ ipcMain.handle('ym:quit', () => { quitting = true; app.quit(); });
 // ПКМ: popup-меню у курсора (закрывается любым кликом снаружи)
 ipcMain.handle('ym:openMenu', async (_e, x, y) => {
   if (!win || win.isDestroyed()) return;
+  menuOpen = true; // пока меню открыто, в режиме «desktop» не прятать
   openMenuPopup({
     x: Number(x),
     y: Number(y),
     payload: { items: buildMusicMenuItems(loadUi(), !!loadToken()) },
     onPick: onMusicMenuPick,
+    onClose: () => {
+      menuOpen = false;
+      // FG-смотритель узнаёт о возврате фокуса рабочему столу до 400 мс —
+      // перепроверяем видимость чуть позже, чтобы не мигнуть зря
+      setTimeout(applyDisplayMode, 450);
+    },
   });
 });
 
@@ -671,6 +723,7 @@ app.whenReady().then(() => {
   // а через setLoginItemSettings не прописываем: он создавал безымянный
   // реестровый ключ Run без иконки.
   createWindow();
+  applyDisplayMode(); // при «только рабочий стол» стартуем скрытым, если активна программа
   createTray();
   startServices();
   // резервный источник «что играет» — Windows SMTC (работает без токена)
@@ -679,8 +732,9 @@ app.whenReady().then(() => {
     smtc.start();
     // рабочий стол vs другие окна — управление click-through
     const fg = new ForegroundWatcher((mode) => {
-      const m = mode === 'desktop' ? 'desktop' : 'window';
-      if (win && !win.isDestroyed()) win.webContents.send('yp:fgmode', m);
+      fgNow = mode === 'desktop' ? 'desktop' : 'window';
+      if (win && !win.isDestroyed()) win.webContents.send('yp:fgmode', fgNow);
+      applyDisplayMode();
     });
     fg.start();
   }

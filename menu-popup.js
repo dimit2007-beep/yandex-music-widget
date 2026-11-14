@@ -48,9 +48,11 @@ ipcMain.on('menu:ready', (e, size) => {
 function close() {
   if (!popup) return;
   const p = popup;
+  const cb = cur && cur.onClose; // уведомить владельца меню (режим показа и т.п.)
   popup = null;
   cur = null;
   try { p.close(); } catch (_) {}
+  if (cb) { try { cb(); } catch (_) {} }
 }
 
 function estimateSize(payload) {
@@ -70,9 +72,9 @@ function estimateSize(payload) {
   return { width, height };
 }
 
-function openMenuPopup({ x, y, payload, onPick }) {
+function openMenuPopup({ x, y, payload, onPick, onClose }) {
   close(); // прежнее меню убрать
-  cur = { x: Math.round(x), y: Math.round(y), onPick };
+  cur = { x: Math.round(x), y: Math.round(y), onPick, onClose };
   const est = estimateSize(payload);
   // параметры popup'а — максимально близко к плашкам (они рисуют текст нормально)
   popup = new BrowserWindow({
