@@ -45,8 +45,8 @@ foreach ($f in $files) {
   Copy-Item (Join-Path $root $f) $app -Recurse -Force
 }
 
-# 3) launchers and instructions (everything from portable\) -> root
-Get-ChildItem (Join-Path $root 'portable') -File | ForEach-Object {
+# 3) launchers and instructions (everything from templates\) -> root
+Get-ChildItem (Join-Path $root 'templates') -File | ForEach-Object {
   Copy-Item $_.FullName (Join-Path $out $_.Name) -Force
 }
 

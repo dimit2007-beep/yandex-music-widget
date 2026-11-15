@@ -43,7 +43,7 @@ npm-вариант тоже работает (если `node` в PATH): `npm sta
 
 Node.js и npm нужны только для разработки и пересборки (`npm run build`).
 
-`portable\` — это исходники-шаблоны, а не рабочие файлы: сам по себе
+`templates\` — это исходники-шаблоны, а не рабочие файлы: сам по себе
 такой vbs не работает (рядом нет папки `app`). Запускать нужно из
 собранной папки — шаблон при попытке запуска из исходников сам
 подскажет об этом сообщением.
@@ -128,7 +128,7 @@ New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" `
 - `clock.html`, `clock.css`, `clock-renderer.js`, `preload-clock.js` — часы
 - `start.bat`, `start.ps1`, `start.vbs` — запуск и остановка
 - `build.ps1` — сборка портативной папки `build\YMMusicWidget` (без Node/npm)
-- `portable\` — шаблоны стартеров и инструкция для портативной сборки
+- `templates\` — шаблоны стартеров и инструкция для портативной сборки
 - `icon.ico` — иконка виджета; `clock.ico` — иконка часов
 - `make-clock-ico.ps1` — генератор `clock.ico` (стиль берёт из `icon.ico`)
 - `clock-launcher.cs` — исходник `YMClock.exe` (компилируется в build.ps1)
