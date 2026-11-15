@@ -28,7 +28,6 @@ const { SmtcWatcher, sendMediaKey } = require('./smtc');
 const { CdpWatcher, buildRestartPs } = require('./cdp');
 const { ForegroundWatcher } = require('./foreground');
 const { openMenuPopup } = require('./menu-popup');
-const { computeHole, buildClip } = require('./fg-clip');
 
 // диагностика падений дочерних процессов Chromium (renderer/gpu)
 app.on('child-process-gone', (_e, details) => {
@@ -420,11 +419,6 @@ function createWindow() {
   win.on('resize', saveBoundsSoon);
   win.on('move', saveBoundsSoon);
   win.on('close', saveBounds);
-  // виджет переехал/изменился — «дырка» под активным окном должна двигаться
-  // вместе с плашкой плавно (как штатное перекрытие окон), поэтому пересчёт
-  // на каждом событии, без дебаунса
-  win.on('move', applyDisplayMode);
-  win.on('resize', applyDisplayMode);
   win.applyUi = (ui) => {
     if (win.isDestroyed()) return;
     win.setMovable(!ui.locked);      // фиксируем перетаскивание окна
@@ -433,10 +427,9 @@ function createWindow() {
   win.applyUi(loadUi()); // применить сохранённую фиксацию сразу
   win.webContents.on('did-finish-load', () => {
     pushToRenderer('yp:ui', loadUi()); // применить сохранённый вид
-    // и актуальный режим стол/окна и «дырку»: события от FG-смотрителя могли
-    // прийти раньше, чем страница загрузилась и подписалась — тогда они терялись
+    // и актуальный режим стол/окна: событие от FG-смотрителя могло прийти
+    // раньше, чем страница загрузилась и подписалась — тогда оно терялось
     pushToRenderer('yp:fgmode', fgNow);
-    sendFgHole(lastHole);
   });
   // ПКМ по виджету — popup-меню у курсора (renderer шлёт координаты)
   // (сам renderer вызывает 'ym:openMenu'; см. IPC-секцию)
@@ -505,60 +498,37 @@ function popupOn(wnd, menu) {
   });
 }
 
-// «Режим показа»: 'top' — всегда поверх приложений; 'desktop' — виден на
-// рабочем столе, а наехавшее окно прячет только ту часть плашки, которую
-// реально перекрывает (прозрачная «дырка», сквозь неё видно окно)
-let fgNow = 'window';   // что сейчас активно (от ForegroundWatcher)
-let fgRect = null;      // границы активного окна в DIP { x, y, w, h } | null
+// «Режим показа»: 'top' — всегда поверх приложений; 'desktop' — плашка живёт
+// в общем слое окон, как виджет рабочего стола: видна над обоями, а любое
+// наехавшее окно — активное или нет — накрывает её штатно, силами самой
+// Windows. Поэтому перекрытие всегда плавное и точное: без «дырок», опроса
+// и пересчётов — ровно как окна перекрывают друг друга
+let fgNow = 'window';   // что сейчас активно (от ForegroundWatcher) — для клик-сквози
 let userHidden = false; // пользователь сам скрыл виджет («Показать/скрыть»)
-let menuOpen = false;   // открыто ПКМ-меню виджета — плашка целиком видима
-let lastHole = null;    // последний payload «дырки» { hole, clip } | null
-
-function sendFgHole(payload) {
-  lastHole = payload || null;
-  if (win && !win.isDestroyed()) win.webContents.send('yp:fghole', payload || null);
-}
 
 function applyDisplayMode() {
   if (!win || win.isDestroyed()) return;
   const mode = displayMode;
-  if (mode !== 'desktop' || userHidden) {
-    // поверх приложений: прятать может только сам пользователь
-    sendFgHole(null);
-    if (userHidden) {
-      if (win.isVisible()) win.hide();
-      return;
-    }
-    if (!win.isVisible()) { console.log('[disp] top -> showInactive'); win.showInactive(); }
-    return;
-  }
-  // только рабочий стол: на столе, при открытом меню или без данных об окне —
-  // плашка видна целиком
-  if (menuOpen || fgNow === 'desktop' || !fgRect) {
-    if (!win.isVisible()) { console.log('[disp] desktop -> showInactive'); win.showInactive(); }
-    sendFgHole(null);
-    return;
-  }
-  // активно чужое окно: вырезаем дырку под перекрытую часть плашки
-  const b = win.getBounds();
-  const hole = computeHole(b, fgRect);
-  if (!hole) {
-    // окно не наехало — плашку не прячет вовсе
-    if (!win.isVisible()) { console.log('[disp] desktop no-overlap -> showInactive'); win.showInactive(); }
-    sendFgHole(null);
-    return;
-  }
-  const { covered, clip } = buildClip(b.width, b.height, hole);
-  if (covered) {
-    // окно накрыло плашку целиком — прячем, как раньше
-    console.log('[disp] desktop covered by ' + JSON.stringify(fgRect) + ' -> hide');
-    sendFgHole(null);
+  const desktop = mode === 'desktop' && !userHidden;
+  // 'desktop': окно не topmost — перекрытие делает сама Windows;
+  // 'top': снова поверх всех окон
+  if (desktop && win.isAlwaysOnTop()) win.setAlwaysOnTop(false);
+  if (!desktop && !win.isAlwaysOnTop()) win.setAlwaysOnTop(true, 'screen-saver');
+  if (userHidden) {
     if (win.isVisible()) win.hide();
     return;
   }
-  if (!win.isVisible()) { console.log('[disp] desktop partial -> showInactive'); win.showInactive(); }
-  console.log('[disp] desktop hole ' + JSON.stringify(hole));
-  sendFgHole({ hole, clip });
+  if (!win.isVisible()) { console.log('[disp] show (mode=' + mode + ')'); win.showInactive(); }
+}
+
+// поднять окно наверх его зоны. moveTop/HWND_TOP для нашего окна (no-activate,
+// toolwindow) не срабатывает — проверено тестом; надёжно работает трюк
+// «мгновение topmost, затем не-topmost»: окно оказывается на самом верху
+// normal-банды, над соседними окнами, как при клике на обычное окно
+function raiseWindow() {
+  if (!win || win.isDestroyed()) return;
+  win.setAlwaysOnTop(true, 'screen-saver');
+  if (displayMode === 'desktop' && !userHidden) win.setAlwaysOnTop(false);
 }
 
 function applyUi(patch) {
@@ -666,7 +636,8 @@ function toggleWin() {
   } else {
     userHidden = false;
     win.show();
-    win.focus();
+    applyDisplayMode();
+    raiseWindow(); // подняться над соседними в общем слое (режим «desktop»)
   }
 }
 
@@ -690,18 +661,12 @@ ipcMain.handle('ym:quit', () => { quitting = true; app.quit(); });
 // ПКМ: popup-меню у курсора (закрывается любым кликом снаружи)
 ipcMain.handle('ym:openMenu', async (_e, x, y) => {
   if (!win || win.isDestroyed()) return;
-  menuOpen = true; // пока меню открыто, в режиме «desktop» не прятать
   openMenuPopup({
     x: Number(x),
     y: Number(y),
     payload: { items: buildMusicMenuItems(loadUi(), !!loadToken()) },
     onPick: onMusicMenuPick,
-    onClose: () => {
-      menuOpen = false;
-      // FG-смотритель узнаёт о возврате фокуса рабочему столу до 400 мс —
-      // перепроверяем видимость чуть позже, чтобы не мигнуть зря
-      setTimeout(applyDisplayMode, 450);
-    },
+    onClose: () => {},
   });
 });
 
@@ -709,6 +674,11 @@ ipcMain.handle('ym:openMenu', async (_e, x, y) => {
 ipcMain.handle('ym:getPosition', () => {
   if (!win || win.isDestroyed()) return null;
   return win.getPosition();
+});
+// взятись за плашку — подняться над соседними в общем слое окон (режим «desktop»),
+// как у обычного окна: клик выводит его наверх
+ipcMain.handle('ym:raise', () => {
+  if (win && !win.isDestroyed()) raiseWindow();
 });
 ipcMain.on('ym:moveTo', (_e, x, y) => {
   if (!win || win.isDestroyed()) return;
@@ -770,22 +740,18 @@ app.whenReady().then(() => {
   // а через setLoginItemSettings не прописываем: он создавал безымянный
   // реестровый ключ Run без иконки.
   createWindow();
-  applyDisplayMode(); // при «только рабочий стол» стартуем скрытым, если активна программа
+  applyDisplayMode(); // применить сохранённый режим показа (top/desktop)
   createTray();
   startServices();
   // резервный источник «что играет» — Windows SMTC (работает без токена)
   if (!process.env.YM_NO_SVCS) {
     const smtc = new SmtcWatcher(onSmtcState);
     smtc.start();
-    // рабочий стол vs другие окна — управление click-through и «дыркой»
+    // рабочий стол vs другие окна — управление клик-сквозью
     // (окна самого виджета — меню, окно входа — считаем рабочим столом)
     const fg = new ForegroundWatcher((info) => {
       fgNow = info.mode === 'desktop' ? 'desktop' : 'window';
-      fgRect = info.mode === 'window' && [info.x, info.y, info.w, info.h].every(Number.isFinite)
-        ? { x: info.x, y: info.y, w: info.w, h: info.h }
-        : null;
       if (win && !win.isDestroyed()) win.webContents.send('yp:fgmode', fgNow);
-      applyDisplayMode();
     }, process.pid);
     fg.start();
   }

@@ -35,6 +35,8 @@ let drag = null; // { startMouseX, startMouseY, winX, winY }
 
 window.addEventListener('mousedown', (e) => {
   if (e.button !== 0 || locked) return;
+  // как у обычного окна: взятись — подняться над соседними в общем слое
+  window.ymc.raise();
   window.ymc.getPositions().then((pos) => {
     if (!pos || pos.length < 2) return;
     const [px, py] = pos;
@@ -81,11 +83,6 @@ let ignoreMouse = null;
 window.ymc.onFgMode((mode) => {
   fgMode = mode;
   updateIgnore();
-});
-
-// «дырка» под активное окно: прозрачная часть плашки, сквозь неё видно окно
-window.ymc.onFgHole((d) => {
-  $('plate').style.clipPath = (d && d.clip) || '';
 });
 
 function updateIgnore() {

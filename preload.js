@@ -5,8 +5,6 @@ contextBridge.exposeInMainWorld('ym', {
   onState: (cb) => ipcRenderer.on('yp:state', (_e, s) => cb(s)),
   onAuth: (cb) => ipcRenderer.on('yp:auth', (_e, a) => cb(a)),
   onFgMode: (cb) => ipcRenderer.on('yp:fgmode', (_e, m) => cb(m)),
-  // «дырка» под активное окно в режиме «только рабочий стол»: { hole, clip } | null
-  onFgHole: (cb) => ipcRenderer.on('yp:fghole', (_e, d) => cb(d)),
   onUi: (cb) => ipcRenderer.on('yp:ui', (_e, u) => cb(u)),
 
   // действия
@@ -33,4 +31,6 @@ contextBridge.exposeInMainWorld('ym', {
   // ручное перетаскивание (drag-области глотали ПКМ)
   getPosition: () => ipcRenderer.invoke('ym:getPosition'),
   moveTo: (x, y) => ipcRenderer.send('ym:moveTo', x, y),
+  // взятись за плашку — подняться над соседними окнами (режим «desktop»)
+  raise: () => ipcRenderer.invoke('ym:raise'),
 });

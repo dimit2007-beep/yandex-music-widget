@@ -125,7 +125,6 @@ window.ym.authState().then((a) => {
 // ------- клик-сквозь: рабочий стол = интерактив, приложения = сквозь (кроме кнопок) -------
 
 let fgMode = 'window';
-let fgHole = null;      // «дырка» под активное окно (локальные координаты) | null
 let lastMouse = { x: -1, y: -1 };
 let ignoreMouse = null; // текущее посланное состояние
 
@@ -135,22 +134,8 @@ window.ym.onFgMode((mode) => {
   document.body.dataset.fgmode = mode;
 });
 
-window.ym.onFgHole((d) => {
-  fgHole = d && d.hole ? d.hole : null;
-  // прозрачная «дырка» в плашке: сквозь неё видно окно, наехавшее на виджет
-  document.getElementById('widget').style.clipPath = (d && d.clip) || '';
-  updateIgnore(hoveredInteractive(lastMouse.x, lastMouse.y));
-});
-
-function inHole(x, y) {
-  return !!fgHole &&
-    x >= fgHole.x && x < fgHole.x + fgHole.w &&
-    y >= fgHole.y && y < fgHole.y + fgHole.h;
-}
-
 function hoveredInteractive(x, y) {
   if (!fgMode) return false;
-  if (inHole(x, y)) return false; // в дырке виджет «прозрачен» — клики уходят вниз
   if (fgMode === 'desktop') return true;
   // активно приложение: интерактивны только кнопки (и кнопка входа),
   // остальная плашка пропускает клики окну под виджетом
@@ -199,6 +184,8 @@ window.addEventListener('mousedown', (e) => {
   if (e.button !== 0 || uiLocked) return;
   // кнопки плеера и кнопка входа — не драг (там клики)
   if (e.target.closest('button, #btn-login')) return;
+  // как у обычного окна: взятись — подняться над соседними в общем слое
+  window.ym.raise();
   window.ym.getPosition().then((pos) => {
     if (!pos || pos.length < 2) return;
     const [px, py] = pos;
