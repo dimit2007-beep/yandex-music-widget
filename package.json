@@ -5,10 +5,8 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "clock": "electron . --clock"
-  },
-  "dependencies": {
-    "ws": "^8.18.0"
+    "clock": "electron . --clock",
+    "build": "powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1"
   },
   "devDependencies": {
     "electron": "^33.0.0"

@@ -17,6 +17,22 @@ start.bat -Stop        # остановить оба
 
 npm-вариант тоже работает (если `node` в PATH): `npm start`, `npm run clock`.
 
+## Портативная сборка (без Node и npm)
+
+`powershell -File build.ps1` собирает `build\YMMusicWidget` — папку, которая
+работает сама по себе: внутри свой `YMMusicWidget.exe` (Electron-рантайм,
+~270 МБ) и всё приложение в `resources\app`. Папку можно держать где угодно
+и копировать на другой компьютер — устанавливать ничего не нужно.
+`build.ps1 -Zip` дополнительно упакует её в zip.
+
+Внутри папки сборки:
+- `start.vbs` — виджет + часы (двойной клик; повторный запуск не дублирует)
+- `YMMusicWidget.exe` — только виджет (двойной клик по exe)
+- `stop.vbs` — остановить оба
+- `ЗАПУСК.txt` — шпаргалка
+
+Node.js и npm нужны только для разработки и пересборки (`npm run build`).
+
 ## Что умеет
 
 - 🔒 Фрилесс-окно поверх всех окон, перетаскивается мышью (за пустые места)
@@ -89,5 +105,7 @@ New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" `
 - `renderer.js`, `index.html`, `styles.css`, `preload.js` — плашка
 - `clock.html`, `clock.css`, `clock-renderer.js`, `preload-clock.js` — часы
 - `start.bat`, `start.ps1`, `start.vbs` — запуск и остановка
+- `build.ps1` — сборка портативной папки `build\YMMusicWidget` (без Node/npm)
+- `portable\` — стартеры и инструкция, копируемые в портативную сборку
 - `probe-cdp.js` — ручная проверка CDP (для отладки)
-- `vendor/ws` — WebSocket-клиент (нужен для CDP)
+- `vendor/ws` — WebSocket-клиент (нужен для CDP; вендорная копия — без npm install)

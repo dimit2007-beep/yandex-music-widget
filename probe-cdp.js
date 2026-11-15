@@ -1,7 +1,7 @@
 /* Зонд CDP: evaluate-выражение в главном окне Яндекс Музыки.
    Использование: node probe-cdp.js "выражение" */
 const http = require('http');
-const WebSocket = require('ws');
+const WebSocket = require('./vendor/ws'); // вендорная копия ws: без npm install
 
 async function targets() {
   return new Promise((resolve, reject) => {

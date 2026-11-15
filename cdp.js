@@ -6,7 +6,7 @@
  * а также кликаем кнопки (пауза/след/пред/лайк).
  */
 const http = require('http');
-const WebSocket = require('ws');
+const WebSocket = require('./vendor/ws'); // вендорная копия ws: приложение не требует npm install
 
 const PORT = 9222;
 
