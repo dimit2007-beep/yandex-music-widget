@@ -125,6 +125,7 @@ function pushToRenderer(channel, payload) {
 // ---------------- сервисы ----------------
 
 let lastCdpAt = 0;
+let lastPushedSampleAt = 0; // receivedAt последнего доставленного в рендерер сэмпла
 let lastAlbumHash = null;
 let ymRelaunchedAt = 0; // ставим перезапуск ЯМ не чаще раза в 10 минут
 
@@ -155,6 +156,7 @@ function stopServices() {
   }
   api = null;
   lastCdpAt = 0;
+  lastPushedSampleAt = 0;
 }
 
 // сбор состояния: CDP / SMTC + обогащение через REST
@@ -197,6 +199,14 @@ async function deliverState(st, source) {
   if (!track && title && artists && typeof artists === 'string' && title.startsWith(artists)) {
     title = title.slice(artists.length).replace(/^[\s—–-]+/, '');
   }
+  // Обогащение REST-звонками занимает время, тики CDP/SMTC идут внахлёст —
+  // параллельные deliverState завершаются не по порядку. Не даём устаревшему
+  // сэмплу перезаписать уже доставленный более свежий (иначе часы дёргает назад).
+  if (st.receivedAt && st.receivedAt < lastPushedSampleAt) {
+    console.log('[state] пропущен устаревший сэмпл (' + source + ')');
+    return;
+  }
+  if (st.receivedAt) lastPushedSampleAt = st.receivedAt;
   pushToRenderer('yp:state', {
     trackId,
     title,

@@ -22,20 +22,73 @@ let state = null; // последнее состояние от главного
 let coverShown = null; // URL обложки, применённый к <img> последним
 let authorized = false;
 
-// плавный прогресс между обновлениями Ynison
+// ------- таймер прогресса: монотонные часы -------
+// Сэмплы состояния приходят раз в ~2 c, а позиция в них квантована до целых
+// секунд (слайдер в DOM приложения целочисленный). Если каждый сэмпл делать
+// новым якорем, таймер каждые ~2 c откатывается назад на долю секунды —
+// «дёргается». Поэтому позиция — часы, которые тикают сами между сэмплами
+// (posMs + прошедшее время от якоря), а якорь переприменяется только при
+// РЕАЛЬНОМ сдвиге: перемотка, смена трека, первый сэмпл. Мелкие расхождения
+// сэмпла с нашими часами (шум квантования ±1 c) игнорируем.
+let posMs = 0;      // опорная позиция, мс
+let posAt = 0;      // Date.now() опорной позиции; 0 = пауза (не тикаем)
+let anchored = false;
+let lastTitle = null;
+
+function interpolatedPos(now) {
+  return posAt ? posMs + (now - posAt) : posMs;
+}
+
+// применить якорь из нового состояния
+function applyAnchor(s) {
+  const now = Date.now();
+  if (!s.title) {
+    posMs = 0; posAt = 0; anchored = false; lastTitle = null; // «тишина» — в ноль
+    return;
+  }
+  const speed = s.playbackSpeed || 1;
+  // сэмпл снят в момент receivedAt; пока шли обогащающие запросы, трек играл
+  const at = s.receivedAt || now;
+  const a = Math.max(0, (s.progressMs || 0) + (s.paused ? 0 : (now - at) * speed));
+  if (s.paused) {
+    // пауза: застываем на позиции сэмпла. Повторные сэмплы на паузе дают одно
+    // и то же значение (позиция заморожена), так что снап не дёргает; зато
+    // перемотка на паузе видна сразу и после возобновления часы не «забегают»
+    posMs = a;
+    posAt = 0;
+    anchored = true;
+    lastTitle = s.title;
+    return;
+  }
+  const cur = interpolatedPos(now);
+  // шум квантования (позиция приходит целыми секундами) даёт расхождение
+  // в пределах ±1 c и меняется от сэмпла к сэмплу — его игнорируем. Устойчивый
+  // сдвиг больше ~1.2 c означает реальное событие: перемотку, буферизацию,
+  // конец трека. Так дисплей движется монотонно, без пилы каждые 2 c.
+  const o = a - cur;
+  const seek = !anchored || s.title !== lastTitle || Math.abs(o) > 1200;
+  if (seek) {
+    posMs = a;
+    posAt = now;
+    anchored = true;
+  } else if (!posAt) {
+    posAt = now; // возобновили после паузы — тикаем с той же позиции
+  }
+  lastTitle = s.title;
+}
+
+// показ: интерполяция каждые 250 мс между сэмплами состояния
 setInterval(() => {
-  if (!state || state.paused || !state.durationMs) return;
-  const speed = state.playbackSpeed || 1;
-  const elapsed = Date.now() - state.receivedAt;
-  const p = state.progressMs + elapsed * speed;
-  renderProgress(Math.min(p, state.durationMs));
-}, 500);
+  if (!state) return;
+  renderProgress(state.paused ? posMs : interpolatedPos(Date.now()));
+}, 250);
 
 function renderProgress(progressMs) {
   const d = state ? state.durationMs : 0;
-  const pct = d ? (100 * progressMs) / d : 0;
+  const p = d ? Math.min(progressMs, d) : progressMs; // у конца не выпадать за длительность
+  const pct = d ? (100 * p) / d : 0;
   els.fill.style.width = pct.toFixed(2) + '%';
-  els.time.textContent = fmt(progressMs) + ' / ' + fmt(d);
+  els.time.textContent = fmt(p) + ' / ' + fmt(d);
 }
 
 function fmt(ms) {
@@ -46,7 +99,7 @@ function fmt(ms) {
 }
 
 function renderState(s) {
-  state = s;  if (s.title) {
+  if (s.title) {
     els.title.textContent = s.title;
     els.title.title = s.title + (s.album ? ' · ' + s.album : '');
   } else {
@@ -73,13 +126,15 @@ function renderState(s) {
   // .hidden — присваивание молча ничего не делает. Переключаем атрибут.
   els.icPlay.toggleAttribute('hidden', !s.paused);
   els.icPause.toggleAttribute('hidden', !!s.paused);
-  els.time.textContent = fmt(s.progressMs) + ' / ' + fmt(s.durationMs);
 }
 
 // ------- события из главного процесса -------
 
 window.ym.onState((s) => {
+  state = s;
+  applyAnchor(s); // часы: применить якорь (со сдвигом только при реальном событии)
   renderState(s);
+  renderProgress(s.paused ? posMs : interpolatedPos(Date.now()));
 });
 
 window.ym.onAuth((a) => {
