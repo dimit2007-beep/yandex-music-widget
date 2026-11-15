@@ -2,7 +2,6 @@
 
 const $ = (id) => document.getElementById(id);
 const els = {
-  auth: $('auth-view'),
   player: $('player'),
   cover: $('cover'),
   title: $('title'),
@@ -15,12 +14,10 @@ const els = {
   icPlay: $('ic-play'),
   icPause: $('ic-pause'),
   next: $('btn-next'),
-  login: $('btn-login'),
 };
 
 let state = null; // последнее состояние от главного процесса
 let coverShown = null; // URL обложки, применённый к <img> последним
-let authorized = false;
 
 // ------- таймер прогресса: монотонные часы -------
 // Сэмплы состояния приходят раз в ~2 c, а позиция в них квантована до целых
@@ -137,12 +134,6 @@ window.ym.onState((s) => {
   renderProgress(s.paused ? posMs : interpolatedPos(Date.now()));
 });
 
-window.ym.onAuth((a) => {
-  authorized = !!a.ok;
-  els.auth.hidden = authorized;
-  els.player.hidden = !authorized;
-});
-
 // ------- кнопки -------
 
 els.play.addEventListener('click', () => state && (state.paused ? window.ym.play() : window.ym.pause()));
@@ -162,20 +153,13 @@ els.like.addEventListener('click', async () => {
   if (ok && state) state.liked = target;
   else els.like.classList.toggle('liked', !target); // откат, если сорвалось
 });
-els.login.addEventListener('click', () => window.ym.login());
 
-// ПКМ по виджету: popup-меню у курсора
 window.addEventListener('contextmenu', (e) => {
   e.preventDefault();
   window.ym.openMenu(e.screenX, e.screenY);
 });
 
-// старт
-window.ym.authState().then((a) => {
-  authorized = !!a.ok;
-  els.auth.hidden = authorized;
-  els.player.hidden = !authorized;
-});
+// старт: плеер виден всегда — вход (через меню) лишь добавляет REST-обогащение
 
 // ------- клик-сквозь: рабочий стол = интерактив, приложения = сквозь (кроме кнопок) -------
 
@@ -195,7 +179,7 @@ function hoveredInteractive(x, y) {
   // активно приложение: интерактивны только кнопки (и кнопка входа),
   // остальная плашка пропускает клики окну под виджетом
   const el = document.elementFromPoint(x, y);
-  return !!el && !!el.closest('button, #btn-login');
+  return !!el && !!el.closest('button');
 }
 
 function updateIgnore(hover) {
@@ -237,8 +221,8 @@ let drag = null; // { startMouseX, startMouseY, winX, winY }
 
 window.addEventListener('mousedown', (e) => {
   if (e.button !== 0 || uiLocked) return;
-  // кнопки плеера и кнопка входа — не драг (там клики)
-  if (e.target.closest('button, #btn-login')) return;
+  // кнопки плеера — не драг (там клики)
+  if (e.target.closest('button')) return;
   // как у обычного окна: взятись — подняться над соседними в общем слое
   window.ym.raise();
   window.ym.getPosition().then((pos) => {
