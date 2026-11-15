@@ -1,0 +1,4 @@
+# vbs are UTF-16LE (WSH requirement) - keep git away from line endings
+*.vbs binary
+*.ico binary
+*.png binary
