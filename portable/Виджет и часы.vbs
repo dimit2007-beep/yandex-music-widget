@@ -13,4 +13,10 @@ For Each p In wmi.ExecQuery("SELECT CommandLine, ExecutablePath FROM Win32_Proce
   End If
 Next
 If Not widgetRunning Then sh.Run """" & exe & """", 1, False
-If Not clockRunning Then sh.Run """" & exe & """ --clock", 1, False
+If Not clockRunning Then
+  If fso.FileExists(dir_ & "\app\YMClock.exe") Then
+    sh.Run """" & dir_ & "\app\YMClock.exe" & """", 1, False
+  Else
+    sh.Run """" & exe & """ --clock", 1, False
+  End If
+End If

@@ -195,6 +195,7 @@ function createWindow() {
     transparent: true,
     focusable: false, // клик по часам не делает их активным окном — рабочий стол остаётся активным
     title: 'Часы',
+    icon: path.join(__dirname, 'clock.ico'), // своя иконка часов (alt-tab, отладка)
     webPreferences: {
       preload: path.join(__dirname, 'preload-clock.js'),
       contextIsolation: true,
@@ -310,8 +311,8 @@ nativeTheme.themeSource = 'dark';
 app.whenReady().then(() => {
   createWindow();
   applyDisplayMode(); // применить сохранённый режим показа (top/desktop)
-  // трей часов (та же иконка)
-  tray = new Tray(path.join(__dirname, 'icon.ico'));
+  // трей часов — своя иконка (в стиле виджета, но циферблат)
+  tray = new Tray(path.join(__dirname, 'clock.ico'));
   tray.setToolTip('Часы · виджет');
   tray.setContextMenu(buildUiMenu());
   tray.on('click', toggleWin);

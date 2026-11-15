@@ -35,6 +35,12 @@ npm-вариант тоже работает (если `node` в PATH): `npm sta
 заново (обновятся пути в реестре). `build.ps1 -Zip` дополнительно упакует
 всё в zip.
 
+У exe свои иконки: `YMMusicWidget.exe` — жёлтая плашка с нотой,
+`YMClock.exe` — жёлтая плашка с циферблатом; в автозапуск часов
+прописывается именно `YMClock.exe`, поэтому Windows показывает там
+значок часов. Часы рисуют `clock.ico` по образцу `icon.ico`
+(перегенерировать: `powershell -File make-clock-ico.ps1`).
+
 Node.js и npm нужны только для разработки и пересборки (`npm run build`).
 
 ## Что умеет
@@ -91,6 +97,8 @@ Node.js и npm нужны только для разработки и перес
 В портативной сборке — два отдельных переключателя: `Автозапуск
 виджета.vbs` и `Автозапуск часов.vbs` (один запуск включает,
 ещё один — выключает; записи в `HKCU\...\Run`, у каждого своя).
+Запись часов указывает на `app\YMClock.exe` — лаунчер со своей иконкой,
+который запускает `YMMusicWidget.exe --clock` и сразу завершается.
 
 Для dev-запуска из папки репозитория — вручную через реестр
 (путь подставь свой):
@@ -116,5 +124,8 @@ New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" `
 - `start.bat`, `start.ps1`, `start.vbs` — запуск и остановка
 - `build.ps1` — сборка портативной папки `build\YMMusicWidget` (без Node/npm)
 - `portable\` — шаблоны стартеров и инструкция для портативной сборки
+- `icon.ico` — иконка виджета; `clock.ico` — иконка часов
+- `make-clock-ico.ps1` — генератор `clock.ico` (стиль берёт из `icon.ico`)
+- `clock-launcher.cs` — исходник `YMClock.exe` (компилируется в build.ps1)
 - `probe-cdp.js` — ручная проверка CDP (для отладки)
 - `vendor/ws` — WebSocket-клиент (нужен для CDP; вендорная копия — без npm install)

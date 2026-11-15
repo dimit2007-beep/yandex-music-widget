@@ -39,7 +39,7 @@ $files = @(
   'cdp.js', 'smtc.js', 'ym-api.js', 'foreground.js',
   'menu-popup.js', 'menu-popup.html', 'menu-popup.css', 'menu-popup-renderer.js',
   'index.html', 'styles.css', 'clock.html', 'clock.css',
-  'icon.ico', 'vendor'
+  'icon.ico', 'clock.ico', 'vendor'
 )
 foreach ($f in $files) {
   Copy-Item (Join-Path $root $f) $app -Recurse -Force
@@ -50,13 +50,41 @@ Get-ChildItem (Join-Path $root 'portable') -File | ForEach-Object {
   Copy-Item $_.FullName (Join-Path $out $_.Name) -Force
 }
 
-# 4) .vbs -> UTF-16LE so WScript reads Cyrillic strings correctly on any locale
+# 4) icons: embed our icon + version info into the main exe (rcedit),
+#    and build the tiny clock launcher with its own clock icon (csc)
+$rcedit = Join-Path $root 'node_modules\rcedit\bin\rcedit-x64.exe'
+$mainExe = Join-Path $appDir 'YMMusicWidget.exe'
+$clockExe = Join-Path $appDir 'YMClock.exe'
+if (Test-Path $rcedit) {
+  & $rcedit $mainExe --set-icon (Join-Path $root 'icon.ico') `
+    --set-version-string FileDescription 'Yandex Music Widget' `
+    --set-version-string ProductName 'Yandex Music Widget' `
+    --set-version-string CompanyName 'Yandex Music Widget'
+  if ($LASTEXITCODE -ne 0) { throw 'rcedit failed on YMMusicWidget.exe' }
+} else {
+  Write-Warning 'rcedit not found (npm install) - YMMusicWidget.exe keeps the default icon'
+}
+$csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+if (Test-Path $csc) {
+  & $csc /nologo /target:winexe /out:"$clockExe" /win32icon:"$(Join-Path $root 'clock.ico')" (Join-Path $root 'clock-launcher.cs')
+  if ($LASTEXITCODE -ne 0) { throw 'csc failed building YMClock.exe' }
+  if (Test-Path $rcedit) {
+    & $rcedit $clockExe --set-version-string FileDescription 'Yandex Music Widget - Clock' `
+      --set-version-string ProductName 'Yandex Music Widget' `
+      --set-version-string CompanyName 'Yandex Music Widget'
+    if ($LASTEXITCODE -ne 0) { throw 'rcedit failed on YMClock.exe' }
+  }
+} else {
+  Write-Warning 'csc.exe not found - no YMClock.exe; launchers will fall back to YMMusicWidget.exe --clock'
+}
+
+# 5) .vbs -> UTF-16LE so WScript reads Cyrillic strings correctly on any locale
 Get-ChildItem $out -Filter '*.vbs' | ForEach-Object {
   $t = [IO.File]::ReadAllText($_.FullName, [System.Text.UTF8Encoding]::new($false))
   [IO.File]::WriteAllText($_.FullName, $t, [System.Text.Encoding]::Unicode)
 }
 
-# 5) zip on request
+# 6) zip on request
 if ($Zip) {
   $zipPath = Join-Path $root 'build\YMMusicWidget-portable.zip'
   if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
