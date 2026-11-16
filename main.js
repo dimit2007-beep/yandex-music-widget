@@ -25,7 +25,7 @@ const fs = require('fs');
 const zlib = require('zlib');
 const { YMApi } = require('./ym-api');
 const { SmtcWatcher, sendMediaKey } = require('./smtc');
-const { CdpWatcher, restartYmWithPort } = require('./cdp');
+const { CdpWatcher, restartYmWithPort, isYmRunning } = require('./cdp');
 const { ForegroundWatcher } = require('./foreground');
 const { openMenuPopup } = require('./menu-popup');
 
@@ -129,8 +129,9 @@ function pushToRenderer(channel, payload) {
 let lastCdpAt = 0;
 let lastPushedSampleAt = 0; // receivedAt последнего доставленного в рендерер сэмпла
 let lastAlbumHash = null;
-let ymRelaunchedAt = 0; // ставим перезапуск ЯМ не чаще раза в 10 минут
-let ymFastTries = 0;    // быстрых попыток до первого живого CDP (старт Windows)
+let ymAttemptAt = 0;   // последнее вмешательство в ЯМ (kill или запуск)
+let ymFailStreak = 0;  // вмешательств подряд без открывшегося порта
+let ymFastTries = 0;   // быстрых попыток поднять закрытую ЯМ (старт Windows)
 
 function startServices() {
   if (process.env.YM_NO_SVCS) return; // отладка: без служб (проверка рендера меню)
@@ -167,6 +168,8 @@ function stopServices() {
   api = null;
   lastCdpAt = 0;
   lastPushedSampleAt = 0;
+  ymAttemptAt = 0;
+  ymFailStreak = 0;
   ymFastTries = 0;
 }
 
@@ -235,18 +238,31 @@ async function deliverState(st, source) {
   });
 }
 
-// перезапуск ЯМ с портом отладки, если запущен без него (защищённо от сбоев)
-function ensureYmDebugPort() {
+// гарантируем, что ЯМ запущена с портом отладки (защищённо от сбоев).
+// Различаем два случая по факту: запущена ли ЯМ (tasklist).
+//  1) ЯМ запущена БЕЗ порта — её открыли вручную, поднял автозапуск или
+//     автообновлятор. Чиним быстро (kill + запуск с портом), пауза между
+//     попытками растёт при серии неудач: 0 / 45 / 90 / 180 с, потом 10 мин,
+//     чтобы не устроить карусель, если запуск с портом не приживается.
+//  2) ЯМ закрыта — запускаем сами, но не навязчиво: пока CDP ни разу не ожил
+//     (старт Windows) раз в 60 с, максимум 3 быстрые попытки; дальше раз в
+//     10 минут — пользователь мог закрыть ЯМ намеренно, не дёргаем.
+async function ensureYmDebugPort() {
   try {
     if (quitting || !cdpWatcher) return;
-    if (cdpWatcher.fresh) return; // состояние читается — всё живо
-    if (cdpWatcher.portUp) return; // порт есть, DOM ещё не готов: ЯМ грузится, не трогать
-    // кулдаун между попытками: когда CDP уже оживал — 10 минут (не дёргаем
-    // ЯМ во время работы). Но пока он ни разу не ожил (старт Windows: первая
-    // попытка могла прийтись на ещё поднимающийся ЯМ) — 60 секунд,
-    // максимум 3 быстрых попытки, дальше обычный темп.
-    const neverOk = !cdpWatcher.lastOkAt;
-    if (Date.now() - ymRelaunchedAt < (neverOk && ymFastTries < 3 ? 60000 : 10 * 60000)) return;
+    if (cdpWatcher.fresh) { ymFailStreak = 0; return; }  // состояние читается — всё живо
+    if (cdpWatcher.portUp) { ymFailStreak = 0; return; } // порт есть, ЯМ грузится — не трогать
+    const ymRunning = await isYmRunning();
+    if (ymRunning) {
+      const waits = [0, 45000, 90000, 180000, 600000];
+      if (Date.now() - ymAttemptAt < waits[Math.min(ymFailStreak, waits.length - 1)]) return;
+    } else {
+      const neverOk = !cdpWatcher.lastOkAt;
+      if (Date.now() - ymAttemptAt < (neverOk && ymFastTries < 3 ? 60000 : 10 * 60000)) return;
+      ymFastTries += 1;
+    }
+    ymAttemptAt = Date.now();
+    ymFailStreak += 1; // сбросится, как только порт откроется и состояние пойдёт
     restartYmWithPort()
       .then((res) => {
         if (res === 'restarted') console.log('[cdp] перезапустил Яндекс Музыку с портом отладки');
@@ -254,8 +270,6 @@ function ensureYmDebugPort() {
         else if (res === 'not-found') console.error('[cdp] Яндекс Музыка не найдена для автозапуска');
       })
       .catch((e) => console.error('[cdp] restart: ' + (e.message || e)));
-    ymRelaunchedAt = Date.now();
-    if (neverOk) ymFastTries += 1;
   } catch (e) {
     console.error('[cdp] restart guard: ' + e.message);
   }

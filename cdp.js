@@ -291,6 +291,26 @@ async function findYmExe() {
   return exe ? exe.full : null;
 }
 
+// запущена ли ЯМ сейчас: tasklist сам отфильтрует по имени образа, а вывод
+// в CSV начинается с кавычки только у строк процессов (служебное сообщение
+// "INFO: ..." — без неё), так что разбор не зависит от языка и кодировки
+let ymImageCache = '';
+async function ymImage() {
+  if (!ymImageCache) {
+    ymImageCache = path.basename((await findYmExe()) || 'Яндекс Музыка.exe');
+  }
+  return ymImageCache;
+}
+
+function isYmRunning() {
+  return ymImage().then((image) => new Promise((resolve) => {
+    execFile('tasklist', ['/FI', 'IMAGENAME eq ' + image, '/FO', 'CSV', '/NH'], { windowsHide: true }, (err, stdout) => {
+      const lines = String(stdout || '').split(/\r?\n/).filter((l) => l.charCodeAt(0) === 34);
+      resolve(lines.length > 0);
+    });
+  }));
+}
+
 // перезапуск ЯМ с портом отладки. force=true — даже если порт уже открыт
 // (пункт меню «Перезапустить»); force=false — только если порт закрыт
 // (автоматический помощник). Исход: 'restarted' (была запущена без порта),
@@ -308,7 +328,7 @@ async function restartYmWithPort(force = false) {
   const wasRunning = await new Promise((resolve) => {
     execFile('taskkill', ['/F', '/T', '/IM', image], { windowsHide: true }, (err) => resolve(!err));
   });
-  await new Promise((r) => setTimeout(r, 1500)); // даём процессам закрыться
+  await new Promise((r) => setTimeout(r, 2500)); // даём процессам ЯМ полностью закрыться, иначе новый экземпляр может напороться на блокировку профиля
   try {
     const child = spawn(exe, ['--remote-debugging-port=' + PORT], {
       detached: true,
@@ -324,4 +344,4 @@ async function restartYmWithPort(force = false) {
   return wasRunning ? 'restarted' : 'started';
 }
 
-module.exports = { CdpWatcher, restartYmWithPort };
+module.exports = { CdpWatcher, restartYmWithPort, isYmRunning };
