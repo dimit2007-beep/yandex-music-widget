@@ -56,6 +56,7 @@ class CdpWatcher {
     this.targetId = null;
     this.stopped = false;
     this.lastOkAt = 0;
+    this.portUpAt = 0; // когда 9222 последний раз отвечал (ЯМ запущена с портом)
   }
 
   start() {
@@ -72,6 +73,12 @@ class CdpWatcher {
 
   get fresh() {
     return Date.now() - this.lastOkAt < 15000;
+  }
+
+  // порт отвечает, но состояние ещё не читается: ЯМ запущена с портом
+  // и грузится — в этот момент её перезапускать нельзя
+  get portUp() {
+    return Date.now() - this.portUpAt < 8000;
   }
 
   _closeWs() {
@@ -121,6 +128,7 @@ class CdpWatcher {
     if (this.stopped) return;
     try {
       const list = await this._targets();
+      this.portUpAt = Date.now(); // порт отвечает
       // ВАЖНО: у приложения несколько page-таргетов (главное окно + мини/фулскрин
       // плеер) с разными состояниями. Порядок в /json может меняться — если
       // каждый тик брать первый попавшийся, мы переподключаемся и получаем
@@ -231,39 +239,89 @@ class CdpWatcher {
   }
 }
 
-// перезапуск приложения с флагом отладки.
-// force=true — перезапустить даже если порт уже открыт (пункт меню «Перезапустить»);
-// force=false — только если ЯМ запущена без порта (автоматический помощник).
-function buildRestartPs(force = false) {
-  return `
-$ErrorActionPreference = 'SilentlyContinue'
-$conn = Test-NetConnection 127.0.0.1 -Port ${PORT} -WarningAction SilentlyContinue
-if ($force -or -not $conn.TcpTestSucceeded) {
-  $main = Get-CimInstance Win32_Process | Where-Object {
-    ($_.CommandLine -match 'YandexMusic|Яндекс Музыка') -and
-    ($_.CommandLine -notmatch '--type=') -and
-    ($_.ExecutablePath -notmatch 'updater')
-  } | Select-Object -First 1
-  if ($main) {
-    Stop-Process -Id $main.ProcessId -Force
-    Start-Sleep -Milliseconds 2000
-    Start-Process $main.ExecutablePath -ArgumentList '--remote-debugging-port=${PORT}'
-    Write-Output 'restarted'
-  } else {
-    # приложение вообще не запущено — поднимаем сами из стандартного места установки
-    $dir = Join-Path $env:LOCALAPPDATA 'Programs\\YandexMusic'
-    $exe = Get-ChildItem $dir -Filter '*.exe' -ErrorAction SilentlyContinue |
-      Where-Object { $_.Name -notmatch 'updater|setup|crash' } |
-      Select-Object -First 1 -ExpandProperty FullName
-    if ($exe) {
-      Start-Process $exe -ArgumentList '--remote-debugging-port=${PORT}'
-      Write-Output 'started'
-    } else {
-      Write-Output 'not-found'
-    }
-  }
-}
-`;
+// ------- перезапуск ЯМ с портом отладки — чистый Node, без PowerShell -------
+// (старый PS-помощник шумел в stderr, молча проваливался на холодном старте
+// и однажды запустил деинсталлятор вместо приложения)
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawn, execFile } = require('child_process');
+
+// открыт ли порт отладки (быстрый опрос по HTTP вместо Test-NetConnection)
+function isPortUp(timeout = 1500) {
+  return new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port: PORT, path: '/json/version', timeout }, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve(false));
+  });
 }
 
-module.exports = { CdpWatcher, buildRestartPs };
+// путь до главного exe ЯМ из стандартной папки установки. ВАЖНО: первый
+// попавшийся exe по алфавиту — это Uninstall (деинсталлятор), поэтому
+// исключаем служебные и берём самый крупный exe — это приложение.
+async function findYmExe() {
+  const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+  const dir = path.join(local, 'Programs', 'YandexMusic');
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch (_) {
+    return null;
+  }
+  const list = await Promise.all(
+    names
+      .filter((n) => /\.exe$/i.test(n))
+      .map(async (n) => {
+        try {
+          const st = await fs.promises.stat(path.join(dir, n));
+          return { name: n, full: path.join(dir, n), size: st.size };
+        } catch (_) {
+          return null;
+        }
+      })
+  );
+  const exe = list
+    .filter(Boolean)
+    .filter((e) => !/updater|setup|crash|uninstall/i.test(e.name))
+    .sort((a, b) => b.size - a.size)[0];
+  return exe ? exe.full : null;
+}
+
+// перезапуск ЯМ с портом отладки. force=true — даже если порт уже открыт
+// (пункт меню «Перезапустить»); force=false — только если порт закрыт
+// (автоматический помощник). Исход: 'restarted' (была запущена без порта),
+// 'started' (была закрыта), 'port-up' (порт уже открыт — делать нечего),
+// 'not-found' (не нашли exe).
+async function restartYmWithPort(force = false) {
+  if (!force && (await isPortUp())) return 'port-up';
+  const exe = await findYmExe();
+  if (!exe) {
+    console.error('[cdp] restart: не нашёл Яндекс Музыку в %LOCALAPPDATA%\\Programs\\YandexMusic');
+    return 'not-found';
+  }
+  const image = path.basename(exe);
+  // закрываем все процессы ЯМ; ошибка = не была запущена, это нормально
+  const wasRunning = await new Promise((resolve) => {
+    execFile('taskkill', ['/F', '/T', '/IM', image], { windowsHide: true }, (err) => resolve(!err));
+  });
+  await new Promise((r) => setTimeout(r, 1500)); // даём процессам закрыться
+  try {
+    const child = spawn(exe, ['--remote-debugging-port=' + PORT], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.unref();
+    child.on('error', (e) => console.error('[cdp] restart: запуск: ' + e.message));
+  } catch (e) {
+    console.error('[cdp] restart: spawn: ' + e.message);
+    return 'error';
+  }
+  return wasRunning ? 'restarted' : 'started';
+}
+
+module.exports = { CdpWatcher, restartYmWithPort };

@@ -25,7 +25,7 @@ const fs = require('fs');
 const zlib = require('zlib');
 const { YMApi } = require('./ym-api');
 const { SmtcWatcher, sendMediaKey } = require('./smtc');
-const { CdpWatcher, buildRestartPs } = require('./cdp');
+const { CdpWatcher, restartYmWithPort } = require('./cdp');
 const { ForegroundWatcher } = require('./foreground');
 const { openMenuPopup } = require('./menu-popup');
 
@@ -39,11 +39,13 @@ const logPath = () => path.join(app.getPath('userData'), 'widget.log');
 ['log', 'error', 'warn'].forEach((k) => {
   const orig = console[k].bind(console);
   console[k] = (...args) => {
+    const stamp = new Date().toLocaleTimeString('ru-RU');
+    const text = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
     try {
-      fs.appendFile(logPath(), args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ') + '\n', () => {});
+      fs.appendFile(logPath(), stamp + ' ' + text + '\n', () => {});
     } catch (_) {}
     try {
-      orig(...args);
+      orig(stamp, ...args);
     } catch (_) {}
   };
 });
@@ -128,6 +130,7 @@ let lastCdpAt = 0;
 let lastPushedSampleAt = 0; // receivedAt последнего доставленного в рендерер сэмпла
 let lastAlbumHash = null;
 let ymRelaunchedAt = 0; // ставим перезапуск ЯМ не чаще раза в 10 минут
+let ymFastTries = 0;    // быстрых попыток до первого живого CDP (старт Windows)
 
 function startServices() {
   if (process.env.YM_NO_SVCS) return; // отладка: без служб (проверка рендера меню)
@@ -144,8 +147,12 @@ function startServices() {
     cdpWatcher = new CdpWatcher(onCdpState);
     cdpWatcher.start();
   }
-  // раз в полминуты гарантируем, что ЯМ запущен с дебажным портом
-  ymRestartTimer = setInterval(ensureYmDebugPort, 30000);
+  // гарантируем, что ЯМ запущен с дебажным портом. Первая проверка — сразу
+  // (через 3 с, дав отработать первому тику CDP): на старте Windows виджет и
+  // ЯМ стартуют одновременно, и ждать первой проверки 30 секунд — долго.
+  // Дальше раз в 10 с — вызов дешёвый: при живом CDP он сразу выходит.
+  setTimeout(ensureYmDebugPort, 3000);
+  ymRestartTimer = setInterval(ensureYmDebugPort, 10000);
 }
 
 function stopServices() {
@@ -160,6 +167,7 @@ function stopServices() {
   api = null;
   lastCdpAt = 0;
   lastPushedSampleAt = 0;
+  ymFastTries = 0;
 }
 
 // сбор состояния: CDP / SMTC + обогащение через REST
@@ -230,19 +238,24 @@ async function deliverState(st, source) {
 // перезапуск ЯМ с портом отладки, если запущен без него (защищённо от сбоев)
 function ensureYmDebugPort() {
   try {
-    if (quitting) return;
-    if (cdpWatcher && cdpWatcher.fresh) return;
-    if (Date.now() - ymRelaunchedAt < 10 * 60000) return;
-    const { spawn } = require('child_process');
-    const enc = Buffer.from(buildRestartPs(), 'utf16le').toString('base64');
-    spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', enc], { windowsHide: true })
-      .stdout.on('data', (d) => {
-        if (String(d).includes('restarted')) {
-          ymRelaunchedAt = Date.now();
-          console.log('[cdp] перезапустил Яндекс Музыку с портом отладки');
-        }
-      });
-    ymRelaunchedAt = Date.now(); // не чаще раза в 10 минут в любом случае
+    if (quitting || !cdpWatcher) return;
+    if (cdpWatcher.fresh) return; // состояние читается — всё живо
+    if (cdpWatcher.portUp) return; // порт есть, DOM ещё не готов: ЯМ грузится, не трогать
+    // кулдаун между попытками: когда CDP уже оживал — 10 минут (не дёргаем
+    // ЯМ во время работы). Но пока он ни разу не ожил (старт Windows: первая
+    // попытка могла прийтись на ещё поднимающийся ЯМ) — 60 секунд,
+    // максимум 3 быстрых попытки, дальше обычный темп.
+    const neverOk = !cdpWatcher.lastOkAt;
+    if (Date.now() - ymRelaunchedAt < (neverOk && ymFastTries < 3 ? 60000 : 10 * 60000)) return;
+    restartYmWithPort()
+      .then((res) => {
+        if (res === 'restarted') console.log('[cdp] перезапустил Яндекс Музыку с портом отладки');
+        else if (res === 'started') console.log('[cdp] запустил Яндекс Музыку с портом отладки (сама была закрыта)');
+        else if (res === 'not-found') console.error('[cdp] Яндекс Музыка не найдена для автозапуска');
+      })
+      .catch((e) => console.error('[cdp] restart: ' + (e.message || e)));
+    ymRelaunchedAt = Date.now();
+    if (neverOk) ymFastTries += 1;
   } catch (e) {
     console.error('[cdp] restart guard: ' + e.message);
   }
@@ -575,18 +588,14 @@ function restartWidgetNow() {
 
 // принудительный перезапуск ЯМ из меню (с портом отладки; поднимает, если закрыта)
 function restartYmNow() {
-  try {
-    const { spawn } = require('child_process');
-    const enc = Buffer.from(buildRestartPs(true), 'utf16le').toString('base64');
-    spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', enc], { windowsHide: true })
-      .stdout.on('data', (d) => {
-        const s = String(d).trim();
-        if (s) console.log('[cdp] restart ЯМ (manual): ' + s);
-        lastCdpAt = 0; // источник временно недоступен — переходим на резерв
-      });
-  } catch (e) {
-    console.error('[cdp] restart ЯМ: ' + e.message);
-  }
+  lastCdpAt = 0; // источник временно недоступен — переходим на резерв
+  restartYmWithPort(true)
+    .then((res) => {
+      if (res === 'restarted') console.log('[cdp] перезапустил Яндекс Музыку (manual)');
+      else if (res === 'started') console.log('[cdp] запустил Яндекс Музыку (manual, сама была закрыта)');
+      else if (res === 'not-found') console.error('[cdp] restart ЯМ (manual): exe не найден');
+    })
+    .catch((e) => console.error('[cdp] restart ЯМ (manual): ' + (e.message || e)));
 }
 
 function buildTrayMenu() {
