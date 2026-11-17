@@ -4,6 +4,14 @@
  */
 const API = 'https://api.music.yandex.ru';
 
+// fetch не должен висеть вечно: 5 с и отваливаемся
+const TIMEOUT_MS = 5000;
+// треки и альбомы не меняются на лету — кэшируем мету, чтобы не ходить в REST
+// на каждый сэмпл состояния (CDP тикает раз в ~2 с, SMTC раз в ~3 с)
+const CACHE_TTL = 5 * 60000;
+// защита от бесконечного роста кэша: переполнился — начинаем заново
+const CACHE_MAX = 200;
+
 function headers(token) {
   return {
     Authorization: `OAuth ${token}`,
@@ -19,10 +27,26 @@ class YMApi {
     this.uid = null;
     this.likedSet = null;
     this.likedCacheAt = 0;
+    this._trackCache = new Map(); // id -> { data, at }
+    this._albumCache = new Map(); // id -> { data, at }
+    // true = сервер отверг токен (401). REST отключается до пересоздания api:
+    // повторный вход через меню вызывает startServices -> новый YMApi
+    this.dead = false;
+  }
+
+  // один раз сообщаем о протухшем токене, дальше методы отдают пустоту без сети
+  _markDead() {
+    if (this.dead) return;
+    this.dead = true;
+    console.error('[api] 401: токен недействителен — REST-обогащение отключено (войдите заново через меню)');
   }
 
   async _get(ep) {
-    const r = await fetch(API + ep, { headers: headers(this.token) });
+    const r = await fetch(API + ep, { headers: headers(this.token), signal: AbortSignal.timeout(TIMEOUT_MS) });
+    if (r.status === 401) {
+      this._markDead();
+      throw new Error(`GET ${ep} -> 401`);
+    }
     if (!r.ok) throw new Error(`GET ${ep} -> ${r.status}`);
     return r.json();
   }
@@ -32,12 +56,18 @@ class YMApi {
       method: 'POST',
       headers: headers(this.token),
       body: '',
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     });
+    if (r.status === 401) {
+      this._markDead();
+      throw new Error(`POST ${ep} -> 401`);
+    }
     if (!r.ok) throw new Error(`POST ${ep} -> ${r.status}`);
     return r.json();
   }
 
   async getUid() {
+    if (this.dead) throw new Error('api отключён (401)');
     if (this.uid) return this.uid;
     const st = await this._get('/account/status');
     const acc = ((st && st.result) || st || {}).account || {};
@@ -46,9 +76,13 @@ class YMApi {
     return this.uid;
   }
 
-  /** Мета данных трека */
+  /** Мета данных трека (сэмплы приходят каждые 2–3 с — держим кэш) */
   async getTrack(id) {
-    const wrap = await this._get(`/tracks/${id}`);
+    if (this.dead) return null;
+    const key = String(id);
+    const hit = this._trackCache.get(key);
+    if (hit && Date.now() - hit.at < CACHE_TTL) return hit.data;
+    const wrap = await this._get(`/tracks/${key}`);
     const list = wrap && Array.isArray(wrap.result) ? wrap.result : Array.isArray(wrap) ? wrap : [];
     const t = list[0] || null;
     if (!t) return null;
@@ -62,7 +96,7 @@ class YMApi {
         : 'https://' + uri
       ).replace('%%', '400x400');
     }
-    return {
+    const data = {
       id: t.id,
       title: t.title || null,
       artists,
@@ -70,10 +104,14 @@ class YMApi {
       cover,
       durationMs: t.durationMs || 0,
     };
+    if (this._trackCache.size > CACHE_MAX) this._trackCache.clear();
+    this._trackCache.set(key, { data, at: Date.now() });
+    return data;
   }
 
   /** Список лайкнутых треков (с кэшем 5 минут) */
   async getLikedIds() {
+    if (this.dead) return null;
     if (this.likedSet && Date.now() - this.likedCacheAt < 5 * 60000) return this.likedSet;
     const uid = await this.getUid();
     const j = await this._get(`/users/${uid}/likes/tracks`);
@@ -87,6 +125,7 @@ class YMApi {
 
     /** Поиск трека по названию (для SMTC-источника), с кэшем успешных результатов */
     async findTrack(title, artists) {
+      if (this.dead) return null;
       const key = (artists || '') + '|' + (title || '');
       if (this._searchCache) {
         const hit = this._searchCache.get(key);
@@ -108,19 +147,27 @@ class YMApi {
       return null;
     }
 
-  /** Общая информация об альбоме (нужны артисты для CDP-источника) */
+  /** Общая информация об альбоме (нужны артисты для CDP-источника), с кэшем */
   async getAlbum(id) {
-    const j = await this._get('/albums/' + id);
+    if (this.dead) return null;
+    const key = String(id);
+    const hit = this._albumCache.get(key);
+    if (hit && Date.now() - hit.at < CACHE_TTL) return hit.data;
+    const j = await this._get('/albums/' + key);
     const a = j && (j.result || j);
     if (!a || !a.artists) return null;
-    return {
+    const data = {
       title: a.title || null,
       artists: a.artists.map((x) => x.name).filter(Boolean).join(', '),
       cover: a.coverUri ? ('https:' + a.coverUri).replace('%%', '400x400') : null,
     };
+    if (this._albumCache.size > CACHE_MAX) this._albumCache.clear();
+    this._albumCache.set(key, { data, at: Date.now() });
+    return data;
   }
 
   async setLike(trackId, liked) {
+    if (this.dead) throw new Error('api отключён (401)');
     const uid = await this.getUid();
     const op = liked ? 'add-multiple' : 'remove-multiple';
     await this._post(`/users/${uid}/likes/tracks/${op}?track-ids=${trackId}`);

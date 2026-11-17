@@ -103,6 +103,17 @@ html, body {
   text-overflow: ellipsis;
 }
 
+/* бегущая строка для длинных названий (renderer ставит --roll при переполнении) */
+#title-text { display: inline-block; }
+#title.rolling { text-overflow: clip; }
+#title.rolling #title-text {
+  animation: title-roll 10s linear 2s infinite alternate;
+}
+@keyframes title-roll {
+  from { transform: translateX(0); }
+  to { transform: translateX(calc(-1 * var(--roll, 0px))); }
+}
+
 #artist {
   font-size: 13px;
   color: var(--text);

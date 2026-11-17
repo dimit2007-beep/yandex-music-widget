@@ -18,6 +18,8 @@ const {
   ipcMain,
   nativeImage,
   nativeTheme,
+  screen,
+  safeStorage,
 } = require('electron');
 app.disableHardwareAcceleration(); // иначе новые окна иногда не получают кадры (GPU-фриз)
 const path = require('path');
@@ -28,6 +30,7 @@ const { SmtcWatcher, sendMediaKey } = require('./smtc');
 const { CdpWatcher, restartYmWithPort, isYmRunning } = require('./cdp');
 const { ForegroundWatcher } = require('./foreground');
 const { openMenuPopup } = require('./menu-popup');
+const { acquireSingleInstance, notifyFirstInstance } = require('./single-instance');
 
 // диагностика падений дочерних процессов Chromium (renderer/gpu)
 app.on('child-process-gone', (_e, details) => {
@@ -36,6 +39,14 @@ app.on('child-process-gone', (_e, details) => {
 
 // Логи в файл + безопасная консоль (EPIPE, если консоль.attach отвалилась)
 const logPath = () => path.join(app.getPath('userData'), 'widget.log');
+
+// ротация: лог растёт без ограничений — при старте разросшийся уводим в .old
+try {
+  if (fs.existsSync(logPath()) && fs.statSync(logPath()).size > 1e6) {
+    fs.renameSync(logPath(), logPath() + '.old');
+  }
+} catch (_) {}
+
 ['log', 'error', 'warn'].forEach((k) => {
   const orig = console[k].bind(console);
   console[k] = (...args) => {
@@ -94,7 +105,14 @@ let oauthResolve = null; // promise токена для окна-инпута
 
 function loadToken() {
   try {
-    return JSON.parse(fs.readFileSync(tokenFile, 'utf8')).token || null;
+    const data = JSON.parse(fs.readFileSync(tokenFile, 'utf8'));
+    if (data.enc) {
+      // зашифрованный вид (safeStorage -> DPAPI Windows). Расшифровать не вышло
+      // (перенесли профиль и т.п.) — считаем, что токена нет
+      if (!safeStorage.isEncryptionAvailable()) return null;
+      return safeStorage.decryptString(Buffer.from(data.enc, 'base64')) || null;
+    }
+    return data.token || null; // старый открытый вид — читаем для совместимости
   } catch (_) {
     return null;
   }
@@ -102,7 +120,19 @@ function loadToken() {
 
 function saveToken(token) {
   fs.mkdirSync(userDir, { recursive: true });
-  fs.writeFileSync(tokenFile, JSON.stringify({ token }, null, 2));
+  let data;
+  try {
+    // шифруем средствами Windows (DPAPI): токен привязан к пользователю этого
+    // компьютера. Шифрование недоступно — пишем открытый текст, как раньше
+    if (safeStorage.isEncryptionAvailable()) {
+      data = { v: 1, enc: safeStorage.encryptString(token).toString('base64') };
+    } else {
+      data = { token };
+    }
+  } catch (_) {
+    data = { token };
+  }
+  fs.writeFileSync(tokenFile, JSON.stringify(data, null, 2));
 }
 
 function loadBounds() {
@@ -111,6 +141,36 @@ function loadBounds() {
   } catch (_) {
     return null;
   }
+}
+
+// восстановленные границы проверяем по текущим мониторам: после отключения
+// монитора окно может остаться за экраном. Центр не на экране — прижимаем
+// к ближайшему workArea. Если ничего не разобрали — null (дефолтные размеры)
+function fitBounds(b) {
+  if (!b || !Number.isFinite(b.x) || !Number.isFinite(b.y) || !b.width || !b.height) return null;
+  let displays;
+  try {
+    displays = screen.getAllDisplays();
+  } catch (_) {
+    return b;
+  }
+  if (!displays || !displays.length) return b;
+  const areas = displays.map((d) => d.workArea);
+  const cx = b.x + b.width / 2;
+  const cy = b.y + b.height / 2;
+  const inside = areas.find(
+    (wa) => cx >= wa.x && cx <= wa.x + wa.width && cy >= wa.y && cy <= wa.y + wa.height
+  );
+  if (inside) return b;
+  const nearest = areas.reduce((best, wa) => {
+    const dx = Math.max(wa.x - cx, 0, cx - (wa.x + wa.width));
+    const dy = Math.max(wa.y - cy, 0, cy - (wa.y + wa.height));
+    const dist = dx * dx + dy * dy;
+    return !best || dist < best.dist ? { wa, dist } : best;
+  }, null).wa;
+  const x = Math.max(nearest.x, Math.min(b.x, nearest.x + nearest.width - b.width));
+  const y = Math.max(nearest.y, Math.min(b.y, nearest.y + nearest.height - b.height));
+  return { ...b, x, y };
 }
 
 function saveBounds() {
@@ -431,7 +491,7 @@ function createWindow() {
     width: 430,
     height: 118,
     useContentSize: true,
-    ...(bounds || {}),
+    ...(fitBounds(bounds) || {}),
     minWidth: 300,
     minHeight: 96,
     frame: false,
@@ -614,6 +674,7 @@ function restartYmNow() {
 
 function buildTrayMenu() {
   const ui = loadUi();
+  const authorized = !!loadToken();
   const OPACITIES = [0, 5, 10, 25, 40, 60, 80, 100];
   return Menu.buildFromTemplate([
     { label: 'Показать/скрыть', click: toggleWin },
@@ -621,8 +682,8 @@ function buildTrayMenu() {
     {
       label: 'Кнопки управления',
       submenu: [
-        { label: 'Показывать кнопки', type: 'checkbox', checked: !!ui.buttons, click: () => applyUi({ buttons: true }) },
-        { label: 'Без кнопок (только трек)', type: 'checkbox', checked: !ui.buttons, click: () => applyUi({ buttons: false }) },
+        { label: 'Показывать кнопки', type: 'radio', checked: !!ui.buttons, click: () => applyUi({ buttons: true }) },
+        { label: 'Без кнопок (только трек)', type: 'radio', checked: !ui.buttons, click: () => applyUi({ buttons: false }) },
       ],
     },
     {
@@ -648,8 +709,9 @@ function buildTrayMenu() {
     },
     { type: 'separator' },
     { label: 'Перезапустить виджет', click: restartWidgetNow },
-    { label: 'Вход через Яндекс…', click: openLogin },
-    { label: 'Сбросить токен (выйти)', click: logout },
+    ...(authorized
+      ? [{ label: 'Сбросить токен (выйти)', click: logout }]
+      : [{ label: 'Вход через Яндекс…', click: openLogin }]),
     { type: 'separator' },
     { label: 'Закрыть виджет', click: () => { quitting = true; app.quit(); } },
   ]);
@@ -771,7 +833,27 @@ ipcMain.handle('ui:getAuthState', () => Promise.resolve({ ok: !!loadToken() }));
 
 nativeTheme.themeSource = 'dark';
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // один экземпляр на систему: повторный запуск (npm start поверх портативной
+  // сборки и т.п.) просит первый показаться и закрывается. Свой лок через
+  // именованный pipe, а не requestSingleInstanceLock: тот держит лок на папке
+  // userData, которую делят виджет и часы — часы бы не запустились.
+  const first = await acquireSingleInstance('widget', () => {
+    if (!win || win.isDestroyed()) return;
+    userHidden = false;
+    win.show();
+    applyDisplayMode();
+    raiseWindow();
+  });
+  if (!first) {
+    const told = await notifyFirstInstance('widget');
+    if (told) {
+      console.log('[single] виджет уже запущен — попросил показать окно, выходим');
+      app.quit();
+      return;
+    }
+    console.log('[single] лок не взят, но живого экземпляра не нашли — работаем без единственности');
+  }
   // автозапуск — ярлыком в каталоге «Автозагрузка» (создаётся отдельно),
   // а через setLoginItemSettings не прописываем: он создавал безымянный
   // реестровый ключ Run без иконки.

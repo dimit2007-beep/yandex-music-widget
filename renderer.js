@@ -5,6 +5,7 @@ const els = {
   player: $('player'),
   cover: $('cover'),
   title: $('title'),
+  titleText: $('title-text'),
   artist: $('artist'),
   fill: $('fill'),
   time: $('time'),
@@ -97,10 +98,10 @@ function fmt(ms) {
 
 function renderState(s) {
   if (s.title) {
-    els.title.textContent = s.title;
+    els.titleText.textContent = s.title;
     els.title.title = s.title + (s.album ? ' · ' + s.album : '');
   } else {
-    els.title.textContent = '—';
+    els.titleText.textContent = '—';
     els.title.title = '';
   }
   els.artist.textContent = s.artists || 'Пока тишина…';
@@ -123,7 +124,21 @@ function renderState(s) {
   // .hidden — присваивание молча ничего не делает. Переключаем атрибут.
   els.icPlay.toggleAttribute('hidden', !s.paused);
   els.icPause.toggleAttribute('hidden', !!s.paused);
+  updateTitleRoll();
 }
+
+// бегущая строка: длинное название, не влезающее в плашку, едет туда-обратно.
+// Дальность задаём CSS-переменной --roll (равна переполнению), включаем классом
+function updateTitleRoll() {
+  const overflow = els.title.scrollWidth - els.title.clientWidth;
+  if (overflow > 4) {
+    els.title.style.setProperty('--roll', overflow + 'px');
+    els.title.classList.add('rolling');
+  } else {
+    els.title.classList.remove('rolling');
+  }
+}
+window.addEventListener('resize', updateTitleRoll);
 
 // ------- события из главного процесса -------
 
@@ -145,7 +160,8 @@ els.like.addEventListener('click', async () => {
   els.like.classList.toggle('liked', target); // оптимистичный отклик
   // CDP-источник: жмём настоящую кнопку «Нравится» в приложении ЯМ (ID не нужен)
   if (state.source === 'cdp') {
-    await window.ym.setLike(null, target);
+    const ok = await window.ym.setLike(null, target);
+    if (!ok && state) els.like.classList.toggle('liked', !target); // клик не прошёл — откат
     return;
   }
   if (!state.trackId) return;
@@ -212,6 +228,7 @@ function applyUi(u) {
   document.body.classList.toggle('no-buttons', u.buttons === false);
   document.body.classList.toggle('locked', !!u.locked);
   uiLocked = !!u.locked;
+  updateTitleRoll(); // показ/скрытие кнопок меняет раскладку — перепроверяем переполнение
 }
 
 // ------- ручное перетаскивание (drag-области глотали ПКМ, показывали системное меню) -------

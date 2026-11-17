@@ -36,7 +36,7 @@ $files = @(
   'main.js', 'clock-main.js',
   'renderer.js', 'clock-renderer.js',
   'preload.js', 'preload-clock.js', 'preload-menu.js',
-  'cdp.js', 'smtc.js', 'ym-api.js', 'foreground.js',
+  'cdp.js', 'smtc.js', 'ym-api.js', 'foreground.js', 'single-instance.js',
   'menu-popup.js', 'menu-popup.html', 'menu-popup.css', 'menu-popup-renderer.js',
   'index.html', 'styles.css', 'clock.html', 'clock.css',
   'icon.ico', 'clock.ico', 'vendor'

@@ -17,6 +17,11 @@ start.bat -Stop        # остановить оба
 
 npm-вариант тоже работает (если `node` в PATH): `npm start`, `npm run clock`.
 
+Защита от дублей встроена и в сами приложения, независимо от vbs-стартеров:
+повторный запуск (`npm start` поверх портативной сборки и т.п.) просит уже
+работающий экземпляр показаться и закрывается сам. Лок — именованный pipe
+Windows, у виджета и часов он независимый.
+
 ## Портативная сборка (без Node и npm)
 
 `powershell -File build.ps1` собирает `build\YMMusicWidget` — папку, которая
@@ -74,8 +79,9 @@ Node.js и npm нужны только для разработки и перес
 - чистые название/артисты/альбом вместо сырых из DOM приложения;
 - обложку и лайк у SMTC-резерва (когда приложение ЯМ закрыто).
 
-Токен хранится только на твоём компьютере (`%APPDATA%\yandex-music-widget`);
-выйти — «Сбросить токен (выйти)» там же в меню.
+Токен хранится только на твоём компьютере (`%APPDATA%\yandex-music-widget`),
+в зашифрованном виде (DPAPI Windows; если шифрование недоступно — открытый
+текст, как раньше); выйти — «Сбросить токен (выйти)» там же в меню.
 
 ## Как это работает
 
@@ -123,6 +129,8 @@ New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" `
 - `smtc.js` — резервный источник: системная медийная сессия Windows (PowerShell)
 - `ym-api.js` — REST API Яндекс Музыки (обогащение и лайки; нужен токен)
 - `foreground.js` — «поверх всех» / «только рабочий стол», z-порядок, клик-сквозь
+- `single-instance.js` — один экземпляр на приложение (лок через именованный
+  pipe: штатный requestSingleInstanceLock делит виджет и часы по общей userData)
 - `menu-popup.js`, `menu-popup.html/css/renderer.js`, `preload-menu.js` — popup-меню по ПКМ
 - `renderer.js`, `index.html`, `styles.css`, `preload.js` — плашка
 - `clock.html`, `clock.css`, `clock-renderer.js`, `preload-clock.js` — часы

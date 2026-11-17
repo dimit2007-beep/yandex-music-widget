@@ -12,12 +12,14 @@ const {
   Menu,
   ipcMain,
   nativeTheme,
+  screen,
 } = require('electron');
 app.disableHardwareAcceleration(); // иначе новые окна (popup-меню) не получают кадры (GPU-фриз)
 const path = require('path');
 const fs = require('fs');
 const { ForegroundWatcher } = require('./foreground');
 const { openMenuPopup } = require('./menu-popup');
+const { acquireSingleInstance, notifyFirstInstance } = require('./single-instance');
 
 // диагностика падений дочерних процессов Chromium (renderer/gpu)
 app.on('child-process-gone', (_e, details) => {
@@ -30,6 +32,14 @@ const uiFile = path.join(userDir, 'clock-ui.json'); // { opacity, locked }
 
 // журнал часов (безопасная запись)
 const logFile = path.join(userDir, 'clock.log');
+
+// ротация: разросшийся лог уводим в .old и начинаем заново (при старте)
+try {
+  if (fs.existsSync(logFile) && fs.statSync(logFile).size > 1e6) {
+    fs.renameSync(logFile, logFile + '.old');
+  }
+} catch (_) {}
+
 const log = (msg) => {
   try {
     fs.appendFileSync(logFile, `[${new Date().toLocaleTimeString()}] ${msg}\n`);
@@ -68,6 +78,35 @@ function loadBounds() {
   } catch (_) {
     return null;
   }
+}
+
+// границы по текущим мониторам: центр не на экране (монитор отключён) —
+// прижимаем к ближайшему workArea, иначе null (дефолтные размеры)
+function fitBounds(b) {
+  if (!b || !Number.isFinite(b.x) || !Number.isFinite(b.y) || !b.width || !b.height) return null;
+  let displays;
+  try {
+    displays = screen.getAllDisplays();
+  } catch (_) {
+    return b;
+  }
+  if (!displays || !displays.length) return b;
+  const areas = displays.map((d) => d.workArea);
+  const cx = b.x + b.width / 2;
+  const cy = b.y + b.height / 2;
+  const inside = areas.find(
+    (wa) => cx >= wa.x && cx <= wa.x + wa.width && cy >= wa.y && cy <= wa.y + wa.height
+  );
+  if (inside) return b;
+  const nearest = areas.reduce((best, wa) => {
+    const dx = Math.max(wa.x - cx, 0, cx - (wa.x + wa.width));
+    const dy = Math.max(wa.y - cy, 0, cy - (wa.y + wa.height));
+    const dist = dx * dx + dy * dy;
+    return !best || dist < best.dist ? { wa, dist } : best;
+  }, null).wa;
+  const x = Math.max(nearest.x, Math.min(b.x, nearest.x + nearest.width - b.width));
+  const y = Math.max(nearest.y, Math.min(b.y, nearest.y + nearest.height - b.height));
+  return { ...b, x, y };
 }
 
 function saveBounds() {
@@ -185,7 +224,7 @@ function createWindow() {
     width: 180,
     height: 70,
     useContentSize: true,
-    ...(bounds || {}),
+    ...(fitBounds(bounds) || {}),
     minWidth: 120,
     minHeight: 56,
     frame: false,
@@ -308,7 +347,29 @@ ipcMain.on('ymc:log', (_e, msg) => log('renderer: ' + msg));
 
 nativeTheme.themeSource = 'dark';
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // один экземпляр часов (свой pipe — независимо от виджета: локи на общую
+  // папку userData не годятся, виджет и часы живут в одной)
+  const first = await acquireSingleInstance('clock', () => {
+    if (!win || win.isDestroyed()) {
+      createWindow();
+      applyDisplayMode();
+      return;
+    }
+    userHidden = false;
+    win.show();
+    applyDisplayMode();
+    raiseWindow();
+  });
+  if (!first) {
+    const told = await notifyFirstInstance('clock');
+    if (told) {
+      log('[single] часы уже запущены — попросил показать окно, выходим');
+      app.quit();
+      return;
+    }
+    log('[single] лок не взят, но живого экземпляра не нашли — работаем без единственности');
+  }
   createWindow();
   applyDisplayMode(); // применить сохранённый режим показа (top/desktop)
   // трей часов — своя иконка (в стиле виджета, но циферблат)
