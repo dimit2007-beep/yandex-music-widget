@@ -11,21 +11,48 @@ const WebSocket = require('./vendor/ws'); // вендорная копия ws: �
 const PORT = 9222;
 
 const STATE_EXPR = `(() => {
-  const bar = document.querySelector('[data-test-id=VIBE_PLAYERBAR]');
+  // Плеербар в приложении ЯМ бывает двух видов: VIBE_PLAYERBAR на Главной
+  // («Моя волна») и PLAYERBAR_DESKTOP на остальных страницах (поиск, артист,
+  // текст песни). Читаем оба, иначе на не-главных страницах виджет слепнет.
+  const bar = document.querySelector('[data-test-id=VIBE_PLAYERBAR]')
+    || document.querySelector('[data-test-id=PLAYERBAR_DESKTOP]');
   if (!bar) return null;
-  const names = [...bar.querySelectorAll('[data-test-id=VIBE_PLAYERBAR_TRACK_NAME] div')]
+  // название: у VIBE — контейнер VIBE_PLAYERBAR_TRACK_NAME (последний
+  // видимый div), у десктопного — ссылка TRACK_TITLE
+  let title = null;
+  const vibeNames = [...bar.querySelectorAll('[data-test-id=VIBE_PLAYERBAR_TRACK_NAME] div')]
     .filter((e) => !e.hasAttribute('aria-hidden'));
+  if (vibeNames.length) title = vibeNames[vibeNames.length - 1].textContent.trim();
+  if (!title) {
+    const t = bar.querySelector('[data-test-id=TRACK_TITLE]');
+    if (t) title = t.textContent.trim();
+  }
+  // артисты: у десктопного плеербара каждая ссылка сама помечена
+  // data-test-id=SEPARATED_ARTIST_TITLE (по одной на артиста)
+  let artists = null;
+  const sepEls = [...bar.querySelectorAll('[data-test-id=SEPARATED_ARTIST_TITLE]')];
+  if (sepEls.length) {
+    const names = [...new Set(sepEls.map((e) => (e.textContent || '').trim()).filter(Boolean))];
+    if (names.length) artists = names.join(', ');
+  }
+  const cover = bar.querySelector('[data-test-id=ENTITY_COVER_IMAGE]') || bar.querySelector('img');
   const links = [...bar.querySelectorAll('a')];
   const albumEl = links.filter((a) => (a.getAttribute('href') || '').indexOf('albumId') !== -1)[0];
-  const inputs = [...bar.querySelectorAll('input[type=range]')];
-  const slider = inputs.filter((i) => i.getAttribute('aria-valuetext'))[0] || inputs[inputs.length - 1];
-  const cover = bar.querySelector('img');
+  // trackId прямо из ссылки на трек: точнее, чем искать трек по названию
+  const trackEl = links.filter((a) => /(?:^|[?&])trackId=\\d+/.test(a.getAttribute('href') || ''))[0];
+  const trackId = trackEl ? (/trackId=(\\d+)/.exec(trackEl.getAttribute('href')) || [])[1] || null : null;
+  // прогресс: приоритет TIMECODE_SLIDER — на страницах поиска/артиста в
+  // баре есть ещё слайдер громкости, «последний input» брать нельзя
+  const slider = bar.querySelector('[data-test-id=TIMECODE_SLIDER]')
+    || [...bar.querySelectorAll('input[type=range]')].filter((i) => i.getAttribute('aria-valuetext'))[0];
   const t0 = bar.querySelector('[data-test-id=TIMECODE_TIME_START]');
   const t1 = bar.querySelector('[data-test-id=TIMECODE_TIME_END]');
   const pause = bar.querySelector('[data-test-id=PAUSE_BUTTON]');
   const like = bar.querySelector('[data-test-id=LIKE_BUTTON]');
   return JSON.stringify({
-    title: names.length ? names[names.length - 1].textContent.trim() : null,
+    title,
+    artists,
+    trackId,
     cover: cover ? cover.getAttribute('src') : null,
     albumHref: albumEl ? albumEl.getAttribute('href') : null,
     cur: t0 ? t0.textContent.trim() : null,
@@ -39,6 +66,12 @@ const STATE_EXPR = `(() => {
 
 function _s(v) {
   return String(v == null ? '' : v).trim();
+}
+
+// обложка в плеербаре отдаётся как 100x100; для плашки берём крупнее
+function bigCover(url) {
+  const s = _s(url);
+  return s ? s.replace(/\/(\d{2,4})x(\d{2,4})(?=[./?]|$)/, '/400x400') : null;
 }
 
 function parseTimeToMs(t) {
@@ -150,8 +183,9 @@ class CdpWatcher {
             this.lastOkAt = Date.now();
             this.onState({
               title: raw.title,
-              artists: null, // подтягивается из REST по albumId
-              cover: raw.cover,
+              artists: raw.artists || null, // на не-главных страницах есть в DOM
+              trackId: raw.trackId || null, // точнее поиска по названию
+              cover: bigCover(raw.cover),
               albumHref: raw.albumHref,
               progressMs: raw.sv != null ? parseInt(raw.sv, 10) * 1000 : parseTimeToMs(raw.cur) || 0,
               durationMs: raw.smax != null ? parseInt(raw.smax, 10) * 1000 : parseTimeToMs(raw.end) || 0,
@@ -160,7 +194,8 @@ class CdpWatcher {
               receivedAt: Date.now(),
               ts: Date.now(),
               paused: !!raw.paused,
-              liked: raw.liked === true || raw.liked === 'true',
+              // null = бар не дал состояние лайка (тогда решает REST-кэш)
+              liked: raw.liked === 'true' ? true : raw.liked === 'false' ? false : null,
             });
           }
         }
@@ -208,19 +243,40 @@ class CdpWatcher {
     return !!ok;
   }
 
+  // клик строго внутри плеербара: PLAY_BUTTON есть и в списках треков,
+  // поэтому глобальный querySelector мог нажать «играть» не у того трека
+  async _clickInBars(selector) {
+    if (!this.fresh) return false;
+    const ok = await this._eval(
+      `(() => {
+        const bar = document.querySelector('[data-test-id=VIBE_PLAYERBAR]')
+          || document.querySelector('[data-test-id=PLAYERBAR_DESKTOP]');
+        if (!bar) return false;
+        const b = bar.querySelector('${selector}');
+        if (b) { b.click(); return true; }
+        return false;
+      })()`
+    );
+    return !!ok;
+  }
+
   async playPause() {
     // при паузе кнопка play, при игре — pause: жмём ту, что есть
     try {
-      let ok = await this._click('[data-test-id=PAUSE_BUTTON]');
-      if (!ok) ok = await this._eval(
+      if (await this._clickInBars('[data-test-id=PAUSE_BUTTON]')) return true;
+      if (await this._clickInBars('[data-test-id=PLAY_BUTTON]')) return true;
+      // запасной путь: кнопка с подписью «Воспроизведение» в самом баре
+      return !!(await this._eval(
         `(() => {
-          const btn = [...document.querySelectorAll('[data-test-id=VIBE_PLAYERBAR] button')]
-            .find((b) => b.getAttribute('aria-label') === 'Воспроизведение');
+          const bar = document.querySelector('[data-test-id=VIBE_PLAYERBAR]')
+            || document.querySelector('[data-test-id=PLAYERBAR_DESKTOP]');
+          if (!bar) return false;
+          const btn = [...bar.querySelectorAll('button')]
+            .find((b) => /^(Воспроизведение|Воспроизвести|Play)$/i.test(b.getAttribute('aria-label') || ''));
           if (btn) { btn.click(); return true; }
           return false;
         })()`
-      );
-      return !!ok;
+      ));
     } catch (_) {
       return false;
     }
@@ -235,7 +291,9 @@ class CdpWatcher {
   }
 
   async toggleLike() {
-    try { return await this._click('[data-test-id=LIKE_BUTTON]'); } catch (_) { return false; }
+    // на страницах поиска/артиста LIKE_BUTTON есть у каждого трека в списке;
+    // глобальный querySelector попал бы в первый трек, а не в текущий
+    try { return await this._clickInBars('[data-test-id=LIKE_BUTTON]'); } catch (_) { return false; }
   }
 }
 

@@ -5,13 +5,16 @@
  * или официальном десктоп-приложении.
  *
  * Долгоживущий PowerShell-процесс polls медиа-сессии и печатает JSON-строку
- * при изменении трека/статуса. Команды — системные media-клавиши.
+ * каждые 3 секунды (heartbeat). Так виджет не замирает, когда CDP ослеп,
+ * а трек при этом не менялся. Команды — системные media-клавиши.
  */
 const { spawn } = require('child_process');
 const os = require('os');
 
 const PS_SCRIPT = `
 $ErrorActionPreference = 'SilentlyContinue'
+# Node читает stdout как UTF-8: без этого кириллица приходит «кракозябрами»
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $null = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType=WindowsRuntime]
 $methods = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 }
@@ -22,37 +25,46 @@ function Await($op, $type) {
   $tsk.Result
 }
 $mgrType = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType=WindowsRuntime]
-$lastKey = ''
+$hadTitle = $false
 while ($true) {
   $mgr = Await ($mgrType::RequestAsync()) $mgrType
   $sessions = $mgr.GetSessions()
   $s = $sessions | Where-Object { $_.SourceAppUserModelId -match 'yandex' } | Select-Object -First 1
   if (-not $s) { $s = $sessions | Select-Object -First 1 }
+  $mp = $null
   if ($s) {
-    $mp = Await $s.GetMediaPropertiesAsync() ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties])
-    if ($mp.Title) {
-      $pl = $s.GetPlaybackInfo()
-      $st = [string]$pl.PlaybackStatus
-      $tl = $s.GetTimelineProperties()
-      $key = "$($mp.Title)|$($mp.Artist)|$st"
-      if ($key -ne $lastKey) {
-        $lastKey = $key
-        $obj = @{
-          app        = $s.SourceAppUserModelId
-          title      = $mp.Title
-          artists    = $mp.Artist
-          album      = $mp.AlbumTitle
-          paused     = ($st -ne 'Playing')
-          progressMs = [int64]$tl.Position.TotalMilliseconds
-          durationMs = [int64]$tl.EndTime.TotalMilliseconds
-          ts         = [int64](Get-Date -UFormat %s -Millisecond 000)
-        }
-        [Console]::Out.WriteLine(($obj | ConvertTo-Json -Compress))
-        [Console]::Out.Flush()
-      }
+    # имя метода зависит от версии Windows: в новых сборках WinRT-проекция
+    # отдаёт TryGetMediaPropertiesAsync, в старых — GetMediaPropertiesAsync.
+    # Раньше здесь был только Get..., и на новых Windows SMTC молчал всегда.
+    $mpOp = $null
+    try { $mpOp = $s.GetMediaPropertiesAsync() }
+    catch { $mpOp = $s.TryGetMediaPropertiesAsync() }
+    if ($mpOp) {
+      $mp = Await $mpOp ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties])
     }
-  } elseif ($lastKey) {
-    $lastKey = ''
+  }
+  if ($mp -and $mp.Title) {
+    # шлём каждые 3 с, даже если трек/статус не менялись: это heartbeat,
+    # который не даёт плашке замереть, когда CDP временно ослеп
+    $hadTitle = $true
+    $pl = $s.GetPlaybackInfo()
+    $st = [string]$pl.PlaybackStatus
+    $tl = $s.GetTimelineProperties()
+    $obj = @{
+      app        = $s.SourceAppUserModelId
+      title      = $mp.Title
+      artists    = $mp.Artist
+      album      = $mp.AlbumTitle
+      paused     = ($st -ne 'Playing')
+      progressMs = [int64]$tl.Position.TotalMilliseconds
+      durationMs = [int64]$tl.EndTime.TotalMilliseconds
+      ts         = [int64](Get-Date -UFormat %s -Millisecond 000)
+    }
+    [Console]::Out.WriteLine(($obj | ConvertTo-Json -Compress))
+    [Console]::Out.Flush()
+  } elseif ($hadTitle) {
+    # трек закончился / сессия пропала — один раз сообщаем «пусто»
+    $hadTitle = $false
     [Console]::Out.WriteLine('{}')
     [Console]::Out.Flush()
   }

@@ -236,13 +236,19 @@ function stopServices() {
 // сбор состояния: CDP / SMTC + обогащение через REST
 async function deliverState(st, source) {
   let track = null;
-  let liked = st.liked === true || false;
+  // Лайк из DOM (CDP, aria-pressed) свежее кэша REST (5 минут): если бар дал
+  // boolean — верим ему, иначе свежепоставленный сердечко откатывалось бы
+  // старым кэшем. REST-кэш — только когда источник лайк не сообщает (SMTC).
+  const domLiked = typeof st.liked === 'boolean' ? st.liked : null;
+  let liked = domLiked === null ? false : domLiked;
   let trackId = st.trackId || null;
   if (api && trackId) {
     try {
       track = await api.getTrack(trackId);
-      const likedIds = await api.getLikedIds().catch(() => null);
-      liked = !!(likedIds && likedIds.has(String(trackId)));
+      if (domLiked === null) {
+        const likedIds = await api.getLikedIds().catch(() => null);
+        liked = !!(likedIds && likedIds.has(String(trackId)));
+      }
     } catch (e) {
       console.error('[api] ' + e.message);
     }
@@ -265,6 +271,10 @@ async function deliverState(st, source) {
       .catch(() => null);
     if (trackId && !track) {
       track = await api.getTrack(trackId).catch(() => null); // каноничное имя трека
+    }
+    if (trackId && domLiked === null) {
+      const likedIds = await api.getLikedIds().catch(() => null);
+      liked = !!(likedIds && likedIds.has(String(trackId)));
     }
   }
   // Засада: бар приложения иногда даёт «Артисты — Трек» одним полем.
@@ -339,8 +349,9 @@ async function onCdpState(st) {
   lastCdpAt = Date.now();
   await deliverState(
     {
-      trackId: null,
+      trackId: st.trackId || null,
       title: st.title,
+      artists: st.artists || null,
       cover: st.cover,
       albumHref: st.albumHref,
       progressMs: st.progressMs,
@@ -355,6 +366,10 @@ async function onCdpState(st) {
 }
 
 async function onSmtcState(st) {
+  // Пока CDP даёт свежее состояние, SMTC не нужен: в нём нет лайка, а
+  // прогресс запаздывает — два источника только дерутся за плашку.
+  // CDP ослеп (страница без плеербара, зависший рендер) — SMTC подхватывает.
+  if (cdpWatcher && cdpWatcher.fresh) return;
   if (!st) {
     // «ничего не играет»: если CDP давно молчит (ЯМ закрыт) — гасим плашку
     // до «Пока тишина…», а не держим застывший трек
